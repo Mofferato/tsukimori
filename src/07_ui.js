@@ -189,7 +189,7 @@ function charScreen(){
         ${c.clan ? `<span class="chip" style="--c:${CLAN[c.clan.id].color}">${CLAN[c.clan.id].crest} ${CLAN[c.clan.id].name}</span>` : ''}
         ${c.pet ? `<span class="chip" style="--c:${ELEMENTS[PET[c.pet].el].color}">🐾 ${PET[c.pet].name}</span>` : ''}</div>
       <div class="panel">
-        <div class="pts">${c.points ? `<b>${c.points}</b> stat points to spend` : 'No unspent points'} <small class="muted">(you earn ${POINTS_PER_LEVEL} per level)</small></div>
+        <div class="pts">${c.points ? `<b>${c.points}</b> stat points to spend <button class="btn sm" data-act="autoAlloc">Auto-assign</button>` : 'No unspent points'} <small class="muted">(you earn ${POINTS_PER_LEVEL} per level)</small></div>
         ${row('hp','❤️','Health', st.maxHp, '+10 max HP per point')}
         ${row('cp','🔷','Chakra', st.maxCp, '+6 max Chakra per point')}
         ${row('agi','💨','Agility', st.agi, '+2 Agility per point: act sooner, dodge and crit more')}
@@ -212,8 +212,8 @@ function resultsScreen(){
         ${r.items.map(it => `<div class="res-row">${ITEM[it.id].icon} ${ITEM[it.id].name}${it.first ? ' <span class="chip" style="--c:var(--gold)">first clear</span>' : ''}</div>`).join('')}
         ${r.lines.map(l => `<div class="res-row" style="font-size:14px">${l}</div>`).join('')}
         <div class="xpline"><span>Lv ${c.level}</span><span class="bar xp"><i style="width:${xpPct(c)}%"></i></span><span>${c.level >= MAX_LEVEL ? 'MAX' : `${c.xp}/${xpToNext(c.level)}`}</span></div></div></div>
-    ${r.ups.length ? `<div class="panel hl-panel">⬆️ Reached level ${c.level}! You have ${c.points} stat points to spend.</div>` : ''}
-    ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<button class="btn sm primary" data-act="manageR" data-arg="${m.id}">Spend ${esc(m.name)}'s points</button>` : ''}</div>`; }).join('')}
+    ${r.ups.length ? `<div class="panel hl-panel sq-up"><div>⬆️ Reached level ${c.level}! ${c.points ? `You have ${c.points} stat points to spend.` : 'Points spent.'}</div>${c.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAlloc">Auto-assign</button><button class="btn sm" data-act="go" data-arg="character">Choose myself</button></span>` : ''}</div>` : ''}
+    ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAllocR" data-arg="${m.id}">Auto-assign</button><button class="btn sm" data-act="manageR" data-arg="${m.id}">Choose myself</button></span>` : ''}</div>`; }).join('')}
     ${(r.ach || []).map(a => `<div class="panel hl-panel">🏅 Achievement: ${a.icon} ${a.name}! ${a.reward.gold ? `+${a.reward.gold} gold ` : ''}${a.reward.shards ? `+${a.reward.shards} shards` : ''}</div>`).join('')}
     ${r.newRank ? `<div class="panel hl-panel">🎖️ New rank: ${r.newRank.name}. ${r.newRank.desc}</div>` : ''}
     ${mine.length ? `<div class="panel hl-panel">📖 New at the Academy: ${mine.map(s => s.icon + ' ' + s.name).join(', ')}</div>` : ''}
@@ -221,8 +221,7 @@ function resultsScreen(){
     <div class="res-btns">
       <button class="btn primary" data-act="go" data-arg="hub">Return to the village</button>
       ${r.retry ? `<button class="btn" data-act="${r.retry.act}" data-arg="${r.retry.arg}">${r.retry.label}</button>` : ''}
-      ${c.points ? `<button class="btn" data-act="go" data-arg="character">Spend points</button>` : ''}
-      ${!c.points && (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="manageR" data-arg="${r.squadUps.find(u => (recruitById(u.id) || {}).points).id}">Spend squad points</button>` : ''}
+      ${c.points || (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="autoAllocAll">Auto-assign all points</button>` : ''}
     </div></section>`;
 }
 function systemScreen(){
@@ -491,6 +490,8 @@ const ACT = {
     const v = Math.floor((it.price || 100) / 2); addInv(a, -1); S.char.gold += v; persist(); render(); toast(`Sold ${it.name} for ${v} gold`);
   },
   alloc: a => { const c = S.char; if(!c.points) return; c.alloc[a]++; c.points--; persist(); render(); },
+  autoAlloc: () => { const c = S.char; if(!c.points) return; allocRecruit(c, autoAllocRecruit(c)); persist(); render(); toast('Points assigned'); },
+  autoAllocAll: () => { let n = 0; for(const x of [S.char, ...S.squad.roster]) if(x.points){ allocRecruit(x, autoAllocRecruit(x)); n++; } persist(); render(); toast(n > 1 ? `Points assigned for ${n} ninja` : 'Points assigned'); },
   respec: () => { const c = S.char; c.points += c.alloc.hp + c.alloc.cp + c.alloc.agi; c.alloc = {hp:0, cp:0, agi:0}; persist(); render(); toast('Points refunded'); },
   askNew: () => showModal('Start a new game?', '<p>This deletes the save in this browser. Export it first if you want to keep it.</p>', [{label:'Keep playing', act:'closeModal'}, {label:'Delete and start over', act:'doNewGame', cls:'bad'}]),
   doNewGame: () => { try{ localStorage.removeItem(SAVE_KEY); }catch(e){} S = null; UI.create = defaultCreate(); go('create'); },
@@ -541,6 +542,14 @@ const ACT = {
   srvJoin: a => connectServer(a),
   srvAdd: () => { const i = $('#srv-in'); if(i && i.value.trim()) connectServer(i.value); },
   srvLeave: () => { disconnectServer(); render(); toast('Left the server'); },
+  hostStart: () => startHosting(),
+  hostStop: () => showModal('Stop hosting?', '<p>Everyone in your village is disconnected. The leaderboard is kept on this device for next time.</p>', [{label:'Keep hosting', act:'closeModal'}, {label:'Stop hosting', act:'doHostStop', cls:'bad'}]),
+  doHostStop: () => { closeModal(); stopHosting(); toast('Your village is closed'); },
+  hostShare: () => {
+    const url = inviteLink(), text = `Join my Tsukimori village! Code ${HOST.code}`;
+    if(navigator.share) return navigator.share({title:'Tsukimori', text, url}).catch(() => {});
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => toast('Invite link copied'), () => toast(url)); else toast(url);
+  },
   srvForget: a => { lsSet(SERVERS_KEY, lsGet(SERVERS_KEY, []).filter(x => x.url !== a)); render(); },
   commClaim: a => { const i = +a, g = COMMUNITY_GOALS[i], ev = S.event; ev.commClaimed = ev.commClaimed || []; if(ev.commClaimed.includes(i) || raidTotals().total < g.pct) return; ev.commClaimed.push(i); S.shards += g.shards; persist(); render(); toast(`+${g.shards} Moon Shards`); },
   petBuy: a => {

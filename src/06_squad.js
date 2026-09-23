@@ -103,6 +103,7 @@ function allocRecruit(r, a){
   const t = (a.hp | 0) + (a.cp | 0) + (a.agi | 0); if(t > r.points || t < 0) throw new Error(`${r.name} has ${r.points} points`);
   for(const k of ['hp','cp','agi']){ const v = Math.max(0, a[k] | 0); r.alloc[k] += v; r.points -= v; } return charStats(r);
 }
+// Splits unspent points by element (fire leans agility, earth health, and so on). Works for the leader too.
 function autoAllocRecruit(r){
   const w = {fire:[1,1,2], wind:[1,1,3], lightning:[1,2,2], earth:[3,1,1], water:[2,2,1]}[r.element], t = w[0] + w[1] + w[2];
   const a = {hp:Math.round(r.points * w[0] / t), cp:Math.round(r.points * w[1] / t)}; a.agi = r.points - a.hp - a.cp; return a;

@@ -361,10 +361,11 @@ textarea{font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;margin:8px 0;resize
 .res-row{font-size:16px;padding:3px 0}
 .res-row b{font-family:var(--display);font-weight:400}
 .hl-panel{margin-top:10px;border-color:var(--hi);background:color-mix(in srgb,var(--hi) 14%,var(--panel));font-weight:700}
-.srv{margin-bottom:12px}.srv h3{margin:0 0 6px}.srv-now{display:flex;gap:10px;align-items:center}.srv-now>div{flex:1;min-width:0}.srv-now small{display:block;color:var(--muted)}.srv-now .srv-motd{color:var(--ink);margin-top:2px}
+.srv{margin-bottom:12px}.srv h3{margin:0 0 6px}.srv-hostbox{margin-top:12px;padding:10px 12px;border:1px dashed var(--line);border-radius:12px}.srv-hostbox.on{border-style:solid;border-color:var(--good)}.srv-hostbox h4{margin:0 0 6px}.srv-hostbox p{margin:0 0 8px}
+.host-code{font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em;background:var(--panel2);padding:1px 6px;border-radius:6px}.srv-now{display:flex;gap:10px;align-items:center}.srv-now>div{flex:1;min-width:0}.srv-now small{display:block;color:var(--muted)}.srv-now .srv-motd{color:var(--ink);margin-top:2px}
 .srv-dot{width:12px;height:12px;border-radius:50%;flex:none;background:var(--muted)}.srv-dot.online{background:var(--good)}.srv-dot.connecting{background:var(--xp)}.srv-dot.offline,.srv-dot.error{background:var(--bad)}
 .srv .lb small{overflow-wrap:anywhere}.srv-host{margin-top:10px}.srv-host summary{cursor:pointer;font-weight:700}.srv-host pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;overflow-x:auto;font-size:13px}
-.sq-up{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.sq-up .btn{flex:none}
+.sq-up{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.sq-up .btn{flex:none}.res-acts{display:flex;gap:6px;flex-wrap:wrap}
 .res-btns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}
 
 
@@ -1707,6 +1708,126 @@ function startEvent(){
 }
 
 /* =====================================================================
+   HOST CORE: the multiplayer server's rules, shared by two hosts:
+   • server/server.js (Node, over WebSocket) requires this file directly;
+   • "Host on this device" in the browser (over WebRTC), so a phone can run a village.
+   It knows nothing about transports: a host calls core.connect(send, close) for each
+   player and feeds their parsed messages to client.receive(msg).
+   ===================================================================== */
+function createHostCore(opts){
+  const o = Object.assign({name:'Tsukimori village', motd:'', maxPlayers:200, maxDocs:{echoes:5000, hires:5000, raidhits:5000, saves:1000}, maxSave:400000,
+    store:null, persist:() => {}, hashId:null, randomId:() => Math.random().toString(16).slice(2, 12)}, opts);
+  const VERSION = 1, SNAP_LIMIT = 200, COLS = ['echoes', 'hires', 'raidhits'];
+  const store = Object.assign({echoes:{}, hires:{}, raidhits:{}, saves:{}}, o.store || {});
+
+  const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+  const num = (v, lo, hi) => { v = +v; return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo; };
+  const int = (v, lo, hi) => Math.round(num(v, lo, hi));
+  const chars = (v, n) => Array.from(String(v == null ? '' : v)).slice(0, n).join('');
+  const small = (x, n) => { try{ const t = JSON.stringify(x); return t && t.length <= n ? JSON.parse(t) : {}; }catch(e){ return {}; } };
+  const CLEAN = {
+    echoes: d => ({name:str(d.name, 16), level:int(d.level, 1, 60), element:str(d.element, 12), rating:int(d.rating, 0, 1e6), power:int(d.power, 0, 1e9), squad:int(d.squad, 0, 2), build:str(d.build, 20000)}),
+    hires: d => ({ids:(Array.isArray(d.ids) ? d.ids : []).slice(-50).map(x => str(x, 40)), name:str(d.name, 16)}),
+    raidhits: d => ({week:int(d.week, 0, 1e7), bossId:str(d.bossId, 40), dmg:int(d.dmg, 0, 1e12), pct:num(d.pct, 0, 100), name:str(d.name, 16)}),
+  };
+  const cleanPresence = p => { p = p && typeof p === 'object' ? p : {};
+    return {name:str(p.name, 16), level:int(p.level, 1, 60), element:str(p.element, 12), look:small(p.look, 600), screen:p.screen === 'battle' ? 'battle' : 'village', rank:str(p.rank, 30), squad:int(p.squad, 0, 2)}; };
+  const EVENTS = {
+    shout: d => ({name:str(d.name, 16), text:str(d.text, 140)}),
+    emote: d => ({name:str(d.name, 16), emoji:chars(d.emoji, 4)}),
+  };
+  // "col/id" for shared docs, "data/users/<uid>/save" for a private save
+  function parsePath(p){
+    const parts = String(p || '').split('/');
+    if(parts.length === 2 && COLS.includes(parts[0]) && /^[\w-]{1,64}$/.test(parts[1])) return {col:parts[0], id:parts[1]};
+    if(parts.length === 4 && parts[0] === 'data' && parts[1] === 'users' && parts[3] === 'save') return {col:'saves', id:parts[2]};
+    return null;
+  }
+  function trim(col){ // keep collections bounded: drop the least recently updated docs
+    const m = store[col], ids = Object.keys(m), max = o.maxDocs[col]; if(ids.length <= max) return;
+    ids.sort((a, b) => (m[a].updatedAt || 0) - (m[b].updatedAt || 0)).slice(0, ids.length - max).forEach(id => delete m[id]);
+  }
+
+  const clients = new Set();
+  const peerList = () => [...clients].filter(c => c.presence).map(c => ({peer:c.peer, by:c.uid, presence:c.presence}));
+  let peersTimer = null;
+  const broadcastPeers = () => { if(peersTimer) return; peersTimer = setTimeout(() => { peersTimer = null; const m = {t:'peers', peers:peerList()}; for(const c of clients) if(c.uid) c.send(m); }, 150); };
+  const snapTimers = {};
+  // Newest-first (or highest `orderBy` first) view of a collection; `cache` shares the sort across subscribers.
+  function snapshot(col, sub, cache){
+    const key = sub.orderBy && /^\w{1,20}$/.test(sub.orderBy) ? sub.orderBy : 'updatedAt';
+    const lim = Math.min(SNAP_LIMIT, Math.max(1, sub.limit | 0 || SNAP_LIMIT)), ck = key + ':' + lim;
+    let docs = cache && cache[ck];
+    if(!docs){ docs = Object.entries(store[col]).sort((a, b) => (+b[1][key] || 0) - (+a[1][key] || 0)).slice(0, lim).map(([id, data]) => ({id, data})); if(cache) cache[ck] = docs; }
+    return {t:'snap', id:sub.id, docs};
+  }
+  const changed = col => { if(snapTimers[col]) return; snapTimers[col] = setTimeout(() => { snapTimers[col] = null; const cache = {}; for(const c of clients) for(const s of c.subs.values()) if(s.col === col) c.send(snapshot(col, s, cache)); }, 300); };
+
+  async function handle(c, m){
+    if(!m || typeof m !== 'object') return;
+    const ack = (ok, extra) => c.send(Object.assign({t:'ack', rid:m.rid, ok}, extra));
+    if(m.t === 'hello'){
+      if(typeof m.token !== 'string' || m.token.length < 16 || m.token.length > 128) return c.close(1008, 'bad token');
+      c.uid = 'u' + String(await o.hashId('tsukimori:' + m.token)).slice(0, 24);
+      c.send({t:'welcome', v:VERSION, uid:c.uid, peer:c.peer, name:o.name, motd:o.motd, peers:peerList()});
+      return;
+    }
+    if(!c.uid) return;
+    if(m.t === 'ping') return c.send({t:'pong'});
+    if(m.t === 'sub'){
+      if(!COLS.includes(m.col) || c.subs.size > 10) return;
+      const s = {id:m.id | 0, col:m.col, orderBy:m.orderBy, limit:m.limit}; c.subs.set(s.id, s); c.send(snapshot(m.col, s));
+      return;
+    }
+    if(m.t === 'set'){
+      const p = parsePath(m.path); if(!p) return ack(false, {err:'Unknown path'});
+      if(p.id !== c.uid) return ack(false, {err:'You can only write your own documents'});
+      const d = m.data && typeof m.data === 'object' ? m.data : {};
+      if(p.col === 'saves'){
+        const json = String(d.json || ''); if(json.length > o.maxSave) return ack(false, {err:'Save is too large for this server'});
+        store.saves[p.id] = {json, savedAt:Date.now(), updatedAt:Date.now()}; trim('saves');
+      } else { store[p.col][p.id] = Object.assign(CLEAN[p.col](d), {updatedAt:Date.now()}); trim(p.col); changed(p.col); }
+      o.persist(store); return ack(true);
+    }
+    if(m.t === 'get'){
+      const p = parsePath(m.path); if(!p) return ack(false, {err:'Unknown path'});
+      if(p.col === 'saves' && p.id !== c.uid) return ack(false, {err:'That save is private'});
+      return ack(true, {doc:Object.prototype.hasOwnProperty.call(store[p.col], p.id) ? store[p.col][p.id] : null});
+    }
+    if(m.t === 'presence'){ c.presence = cleanPresence(m.data); broadcastPeers(); return; }
+    if(m.t === 'emit'){
+      const clean = EVENTS[m.ev]; if(!clean) return ack(false, {err:'Unknown event'});
+      const now = Date.now(); if(now - c.lastEmit < 800) return ack(false, {err:'Slow down a little'}); c.lastEmit = now;
+      const out = {t:'ev', ev:m.ev, data:clean(m.data && typeof m.data === 'object' ? m.data : {}), peer:c.peer};
+      for(const x of clients) if(x.uid) x.send(out);
+      return ack(true);
+    }
+  }
+
+  return {
+    store, clients,
+    full:() => clients.size >= o.maxPlayers,
+    info:() => ({tsukimori:true, v:VERSION, name:o.name, motd:o.motd, players:[...clients].filter(c => c.presence).length, max:o.maxPlayers}),
+    // send(obj) and close(code, reason) deliver to this one player; returns {receive(msg), drop()}.
+    connect(send, close){
+      const c = {peer:o.randomId(), uid:null, presence:null, subs:new Map(), lastEmit:0, tokens:40, last:Date.now(), send, close};
+      clients.add(c);
+      return {
+        client:c,
+        receive(msg){
+          // token bucket: about 10 messages a second, bursts of 40
+          const now = Date.now(); c.tokens = Math.min(40, c.tokens + (now - c.last) / 100); c.last = now;
+          if(--c.tokens < 0) return c.close(1008, 'too many messages');
+          Promise.resolve(handle(c, msg)).catch(e => console.error('Host handler error:', e));
+        },
+        drop(){ if(clients.delete(c) && c.presence) broadcastPeers(); },
+      };
+    },
+  };
+}
+if(typeof module === 'object' && module.exports) module.exports = {createHostCore};
+
+/* =====================================================================
    EXTRA SYSTEMS: daily quests, login streak, achievements, sound,
    auto-battle, the AI guide (Momo) and online multiplayer.
    ===================================================================== */
@@ -1959,8 +2080,7 @@ async function byokAsk(messages, tools){
 /* Offline helper: rule-based advice with one-tap actions (works anywhere, no AI needed). */
 function suggestions(){
   const c = S.char, out = [], st = charStats(c); syncDaily(); syncEvent();
-  if(c.points){ const w = {fire:[1,1,2], wind:[1,1,3], lightning:[1,2,2], earth:[3,1,1], water:[2,2,1]}[c.element], t = w[0] + w[1] + w[2];
-    const a = {hp:Math.round(c.points * w[0] / t), cp:Math.round(c.points * w[1] / t)}; a.agi = c.points - a.hp - a.cp;
+  if(c.points){ const a = autoAllocRecruit(c);
     out.push({text:`Spend your ${c.points} stat points (${a.hp} HP, ${a.cp} Chakra, ${a.agi} Agility suits a ${ELEMENTS[c.element].name} ninja).`, tool:'allocate_points', input:a}); }
   const claim = S.daily.quests.some(q => !q.claimed && questProgress(q) >= q.n) || EVENT_MILESTONES.some((m, i) => !S.event.claimed.includes(i) && S.event.dmg / S.event.pool * 100 >= m.pct);
   if(claim) out.push({text:'You have rewards waiting to be claimed.', tool:'claim_rewards', input:{}});
@@ -2064,32 +2184,120 @@ function serverToken(url){
   const t = lsGet(TOKENS_KEY, {}); if(t[url]) return t[url];
   const a = new Uint8Array(24); crypto.getRandomValues(a); t[url] = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); lsSet(TOKENS_KEY, t); return t[url];
 }
-// "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL
+// "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL; "ABC123" or "p2p:ABC123" → a device-hosted village
+const P2P_CODE = /^[A-Z2-9]{4,8}$/;
 function normServerUrl(u){
   u = String(u || '').trim(); if(!u) return '';
+  const code = u.replace(/^p2p:/i, '').toUpperCase();
+  if(/^p2p:/i.test(u) || (P2P_CODE.test(code) && !/[.:/]/.test(u))) return P2P_CODE.test(code) ? 'p2p:' + code : '';
   if(/^https?:\/\//i.test(u)) u = u.replace(/^http/i, 'ws');
   else if(!/^wss?:\/\//i.test(u)) u = (location.protocol === 'https:' ? 'wss://' : 'ws://') + u;
   try{ const x = new URL(u); return x.protocol + '//' + x.host + (x.pathname === '/' ? '' : x.pathname.replace(/\/$/, '')); }catch(e){ return ''; }
 }
-const infoUrl = ws => ws.replace(/^ws/i, 'http').replace(/(\/\/[^/]+).*$/, '$1') + '/api/info';
-function wsBackend(url, onStatus){
-  let ws = null, rid = 0, subN = 0, closed = false, retry = 0, presenceData = null, beat = null;
+
+/* Transports carry text messages. Each takes handlers {onopen, onmessage(text), onclose} and returns {send(text), close(), ready()}. */
+function wsTransport(url){
+  return h => { const ws = new WebSocket(url); ws.onopen = h.onopen; ws.onmessage = e => h.onmessage(e.data); ws.onclose = h.onclose;
+    return {send:t => ws.send(t), close:() => ws.close(), ready:() => ws.readyState === 1}; };
+}
+// The host plays in their own village without any network in between.
+function loopTransport(){
+  return h => {
+    if(!HOST.core){ setTimeout(h.onclose, 0); return {send(){}, close(){}, ready:() => false}; }
+    let open = true;
+    const shut = () => { if(!open) return; open = false; conn.drop(); HOST.loops.delete(tr); setTimeout(h.onclose, 0); };
+    const conn = HOST.core.connect(o => { if(open) setTimeout(() => open && h.onmessage(JSON.stringify(o)), 0); }, shut);
+    const tr = {send:t => { try{ conn.receive(JSON.parse(t)); }catch(e){} }, close:shut, ready:() => open};
+    HOST.loops.add(tr); setTimeout(h.onopen, 0); return tr;
+  };
+}
+
+/* ---- WebRTC for device-hosted villages ----
+   Players find the host through a public PeerJS broker (it only relays the connection handshake),
+   then talk directly over a data channel. Big messages are split so they fit a data channel. */
+const SIGNAL_URL = () => lsGet('tsukimori_signal', '') || 'wss://0.peerjs.com:443/peerjs';
+const ICE = {iceServers:[{urls:'stun:stun.l.google.com:19302'}, {urls:['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username:'peerjs', credential:'peerjsp'}]};
+const rid6 = (n, abc) => { const a = new Uint8Array(n); crypto.getRandomValues(a); return Array.from(a, b => abc[b % abc.length]).join(''); };
+const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', ID_ABC = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const hostPeerId = code => 'tsukimori-' + code.toLowerCase();
+// A connection to the broker as `id`. onMsg gets {type, src, payload}; onStatus gets 'open' | 'taken' | 'closed'.
+function signalConn(id, onMsg, onStatus){
+  let ws, beat, done = false;
+  try{ ws = new WebSocket(`${SIGNAL_URL()}?key=peerjs&id=${encodeURIComponent(id)}&token=${rid6(10, ID_ABC)}&version=1.5.4`); }catch(e){ setTimeout(() => onStatus('closed'), 0); return {send(){}, close(){}}; }
+  ws.onmessage = e => { let m; try{ m = JSON.parse(e.data); }catch(err){ return; }
+    if(m.type === 'OPEN') onStatus('open'); else if(m.type === 'ID-TAKEN'){ done = true; ws.close(); onStatus('taken'); } else onMsg(m); };
+  ws.onopen = () => { beat = setInterval(() => ws.readyState === 1 && ws.send('{"type":"HEARTBEAT"}'), 5000); };
+  ws.onclose = () => { clearInterval(beat); if(!done){ done = true; onStatus('closed'); } };
+  return {send:m => { if(ws.readyState === 1) ws.send(JSON.stringify(m)); }, close:() => { done = true; clearInterval(beat); ws.close(); }};
+}
+const CHUNK = 16000;
+function dcSend(dc, t){
+  if(dc.readyState !== 'open') return;
+  if(t.length <= CHUNK) return dc.send(t);
+  const id = rid6(6, ID_ABC), n = Math.ceil(t.length / CHUNK);
+  for(let i = 0; i < n; i++) dc.send(`~${id}:${i}:${n}:` + t.slice(i * CHUNK, (i + 1) * CHUNK));
+}
+function dcReader(cb){
+  const parts = {};
+  return t => {
+    if(t[0] !== '~') return cb(t);
+    const m = /^~(\w+):(\d+):(\d+):/.exec(t); if(!m) return;
+    const [all, id, i, n] = m, p = parts[id] = parts[id] || []; p[+i] = t.slice(all.length);
+    if(p.filter(x => x != null).length === +n){ delete parts[id]; cb(p.join('')); }
+  };
+}
+function rtcTransport(code){
+  return h => {
+    let pc = null, dc = null, sig = null, done = false;
+    const cid = rid6(10, ID_ABC), early = [];
+    const fail = () => { if(done) return; done = true; clearTimeout(timer); if(sig) sig.close(); try{ if(pc) pc.close(); }catch(e){} h.onclose(); };
+    const timer = setTimeout(fail, 25000);
+    async function start(){
+      pc = new RTCPeerConnection(ICE);
+      dc = pc.createDataChannel('tsukimori', {ordered:true});
+      dc.onopen = () => { clearTimeout(timer); sig.close(); h.onopen(); };
+      dc.onmessage = (read => e => read(e.data))(dcReader(h.onmessage));
+      dc.onclose = fail;
+      pc.onconnectionstatechange = () => { if(['failed', 'closed'].includes(pc.connectionState)) fail(); };
+      pc.onicecandidate = e => { if(e.candidate) sig.send({type:'CANDIDATE', dst:hostPeerId(code), payload:{cid, candidate:e.candidate}}); };
+      await pc.setLocalDescription(await pc.createOffer());
+      sig.send({type:'OFFER', dst:hostPeerId(code), payload:{cid, sdp:pc.localDescription}});
+    }
+    sig = signalConn('tsukimori-c' + rid6(12, ID_ABC), async m => {
+      const p = m.payload || {};
+      if(m.type === 'EXPIRE' || m.type === 'ERROR') return fail();
+      if(p.cid !== cid || !pc) return;
+      try{
+        if(m.type === 'ANSWER'){ await pc.setRemoteDescription(p.sdp); for(const c of early.splice(0)) pc.addIceCandidate(c).catch(() => {}); }
+        else if(m.type === 'CANDIDATE'){ if(pc.remoteDescription) pc.addIceCandidate(p.candidate).catch(() => {}); else early.push(p.candidate); }
+      }catch(e){ fail(); }
+    }, st => { if(st === 'open') start().catch(fail); else if(!dc || dc.readyState !== 'open') fail(); });
+    return {send:t => dc && dcSend(dc, t), close:fail, ready:() => !!dc && dc.readyState === 'open'};
+  };
+}
+
+/* ---- The client side of the server protocol, over any transport ---- */
+function protoBackend(url, transport, onStatus){
+  let tr = null, rid = 0, subN = 0, closed = false, retry = 0, presenceData = null, beat = null;
   const me = {uid:null, peer:null}, pending = new Map(), subs = new Map(), handlers = {}, peerCbs = [];
-  const send = o => { if(ws && ws.readyState === 1){ ws.send(JSON.stringify(o)); return true; } return false; };
+  const send = o => { if(tr && tr.ready()){ tr.send(JSON.stringify(o)); return true; } return false; };
   const req = o => new Promise((resolve, reject) => {
     const id = ++rid; o.rid = id; if(!send(o)) return reject(new Error('Not connected to the server'));
     pending.set(id, {resolve, reject}); setTimeout(() => { if(pending.delete(id)) reject(new Error('The server did not answer')); }, 10000);
   });
   function open(){
     onStatus('connecting');
-    try{ ws = new WebSocket(url); }catch(e){ onStatus('error', {err:e.message}); return; }
-    ws.onopen = () => send({t:'hello', v:1, token:serverToken(url)});
-    ws.onmessage = e => { let m; try{ m = JSON.parse(e.data); }catch(err){ return; } recv(m); };
-    ws.onclose = () => {
-      ws = null; clearInterval(beat); for(const p of pending.values()) p.reject(new Error('Disconnected')); pending.clear();
-      if(closed) return; peerCbs.forEach(cb => cb({peers:[]}));
-      const wait = Math.min(30000, 1000 * 2 ** retry++); onStatus('offline', {retryIn:wait}); setTimeout(() => { if(!closed) open(); }, wait);
-    };
+    let mine = null;
+    try{
+      mine = tr = transport({
+        onopen:() => send({t:'hello', v:1, token:serverToken(url)}),
+        onmessage:t => { let m; try{ m = JSON.parse(t); }catch(err){ return; } recv(m); },
+        onclose:() => {
+          if(tr !== mine) return; tr = null; clearInterval(beat); for(const p of pending.values()) p.reject(new Error('Disconnected')); pending.clear();
+          if(closed) return; peerCbs.forEach(cb => cb({peers:[]}));
+          const wait = Math.min(30000, 1000 * 2 ** retry++); onStatus('offline', {retryIn:wait}); setTimeout(() => { if(!closed) open(); }, wait);
+        }});
+    }catch(e){ onStatus('error', {err:e.message}); }
   }
   function recv(m){
     if(m.t === 'welcome'){
@@ -2110,14 +2318,19 @@ function wsBackend(url, onStatus){
   const room = {onPeers:cb => { peerCbs.push(cb); }, on:(ev, cb) => { (handlers[ev] = handlers[ev] || []).push(cb); },
     emit:(ev, data) => req({t:'emit', ev, data}), presence:data => { presenceData = data; send({t:'presence', data}); return Promise.resolve(); }};
   setTimeout(open, 0); // after the caller has stored the backend
-  return {db, room, me, close(){ closed = true; clearInterval(beat); if(ws) ws.close(); }};
+  return {db, room, me, close(){ closed = true; clearInterval(beat); if(tr) tr.close(); }};
+}
+function transportFor(url){
+  if(/^p2p:/.test(url)) return HOST.core && url === 'p2p:' + HOST.code ? loopTransport() : rtcTransport(url.slice(4));
+  return wsTransport(url);
 }
 function connectServer(url, quiet){
-  url = normServerUrl(url); if(!url) return quiet || toast('That doesn\'t look like a server address');
+  url = normServerUrl(url); if(!url) return quiet || toast('That doesn\'t look like a server address or village code');
   if(location.protocol === 'https:' && /^ws:/i.test(url)) return quiet || toast('This page is on HTTPS, so it can only join wss:// servers. Open the game from the server\'s own address instead.');
+  if(/^p2p:/.test(url) && !window.RTCPeerConnection && !(HOST.core && url === 'p2p:' + HOST.code)) return quiet || toast('This browser can\'t join device-hosted villages');
   disconnectServer(true);
   NET.server = {url, status:'connecting', info:null};
-  const be = wsBackend(url, (st, m) => {
+  const be = protoBackend(url, transportFor(url), (st, m) => {
     if(!NET.server || NET.backend !== be) return;
     NET.server.status = st;
     if(st === 'online'){
@@ -2140,6 +2353,90 @@ function disconnectServer(keepChoice){
 function rememberServer(url, name){
   const list = lsGet(SERVERS_KEY, []).filter(x => x && x.url !== url); list.unshift({url, name}); lsSet(SERVERS_KEY, list.slice(0, 12));
 }
+
+/* ---- Host on this device ----
+   Runs the same host core as server/server.js inside this page. Players reach it over WebRTC with the
+   village code; the host joins through a loopback. The village lives only while this page is open. */
+const HOST_KEY = 'tsukimori_host', HOST_DATA_KEY = 'tsukimori_host_data';
+const HOST = {core:null, code:'', status:'off', err:'', sig:null, peers:new Map(), loops:new Set(), wake:null, saveT:null, retry:0};
+const hexOf = buf => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+const hostPlayers = () => HOST.core ? HOST.core.info().players : 0;
+function startHosting(){
+  if(HOST.core) return;
+  if(!window.RTCPeerConnection || !(crypto && crypto.subtle)) return toast('This browser can\'t host. Try Chrome, Safari or Firefox over HTTPS.');
+  const cfg = lsGet(HOST_KEY, {}) || {};
+  HOST.code = cfg.code || rid6(6, CODE_ABC);
+  const name = (cfg.name || (S && S.char ? `${S.char.name}'s village` : 'Pocket village')).slice(0, 40);
+  lsSet(HOST_KEY, {code:HOST.code, name, on:true});
+  HOST.core = createHostCore({name, motd:'Hosted on a ninja\'s own device. It closes when they do!', maxPlayers:12,
+    maxDocs:{echoes:300, hires:300, raidhits:300, saves:12}, maxSave:150000, store:lsGet(HOST_DATA_KEY, null),
+    persist:store => { clearTimeout(HOST.saveT); HOST.saveT = setTimeout(() => { try{ localStorage.setItem(HOST_DATA_KEY, JSON.stringify(store)); }catch(e){} }, 1500); },
+    hashId:async t => hexOf(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t))), randomId:() => rid6(10, ID_ABC)});
+  HOST.status = 'starting'; HOST.err = '';
+  hostSignal(); keepAwake();
+  connectServer('p2p:' + HOST.code, true);
+  render();
+}
+function hostSignal(){
+  if(!HOST.core) return;
+  HOST.sig = signalConn(hostPeerId(HOST.code), hostOnSignal, st => {
+    if(!HOST.core) return;
+    if(st === 'open'){ HOST.status = 'online'; HOST.retry = 0; }
+    else if(st === 'taken'){ HOST.status = 'error'; HOST.err = 'That village code is busy (is it open in another tab?). Retrying…'; }
+    if(st !== 'open'){ // keep trying to stay listed with the broker; players already connected are unaffected
+      if(st === 'closed' && HOST.status !== 'error'){ HOST.status = 'error'; HOST.err = 'Can\'t reach the matchmaking service. Retrying…'; }
+      setTimeout(() => { if(HOST.core) hostSignal(); }, Math.min(30000, 2000 * 2 ** HOST.retry++));
+    }
+    if(UI.screen === 'online') render();
+  });
+}
+async function hostOnSignal(m){
+  const p = m.payload || {}, src = m.src; if(!HOST.core || !src || !p.cid) return;
+  const key = src + '/' + p.cid;
+  if(m.type === 'OFFER'){
+    if(HOST.core.full() || HOST.peers.size >= 12) return;
+    const pc = new RTCPeerConnection(ICE), rec = {pc, conn:null, early:[]}; HOST.peers.set(key, rec);
+    const drop = () => { if(!HOST.peers.has(key)) return; HOST.peers.delete(key); if(rec.conn) rec.conn.drop(); try{ pc.close(); }catch(e){} if(UI.screen === 'online') render(); };
+    pc.onicecandidate = e => { if(e.candidate && HOST.sig) HOST.sig.send({type:'CANDIDATE', dst:src, payload:{cid:p.cid, candidate:e.candidate}}); };
+    pc.onconnectionstatechange = () => { if(['failed', 'closed', 'disconnected'].includes(pc.connectionState)) setTimeout(() => { if(pc.connectionState !== 'connected') drop(); }, pc.connectionState === 'disconnected' ? 8000 : 0); };
+    pc.ondatachannel = e => {
+      const dc = e.channel;
+      dc.onopen = () => { rec.conn = HOST.core.connect(o => dcSend(dc, JSON.stringify(o)), () => { dc.close(); drop(); }); if(UI.screen === 'online') render(); };
+      dc.onmessage = (read => e2 => read(e2.data))(dcReader(t => { let msg; try{ msg = JSON.parse(t); }catch(err){ return; } if(rec.conn) rec.conn.receive(msg); }));
+      dc.onclose = drop;
+    };
+    setTimeout(() => { if(!rec.conn) drop(); }, 30000);
+    try{
+      await pc.setRemoteDescription(p.sdp);
+      for(const c of rec.early.splice(0)) pc.addIceCandidate(c).catch(() => {});
+      await pc.setLocalDescription(await pc.createAnswer());
+      HOST.sig.send({type:'ANSWER', dst:src, payload:{cid:p.cid, sdp:pc.localDescription}});
+    }catch(e){ drop(); }
+  } else if(m.type === 'CANDIDATE'){
+    const rec = HOST.peers.get(key); if(!rec) return;
+    if(rec.pc.remoteDescription) rec.pc.addIceCandidate(p.candidate).catch(() => {}); else rec.early.push(p.candidate);
+  }
+}
+function stopHosting(){
+  if(!HOST.core) return;
+  const cfg = lsGet(HOST_KEY, {}) || {}; lsSet(HOST_KEY, Object.assign(cfg, {on:false}));
+  if(HOST.sig) HOST.sig.close();
+  for(const rec of HOST.peers.values()){ try{ rec.pc.close(); }catch(e){} }
+  for(const tr of [...HOST.loops]) tr.close();
+  if(HOST.saveT){ clearTimeout(HOST.saveT); try{ localStorage.setItem(HOST_DATA_KEY, JSON.stringify(HOST.core.store)); }catch(e){} }
+  Object.assign(HOST, {core:null, status:'off', err:'', sig:null, peers:new Map(), loops:new Set(), retry:0});
+  if(HOST.wake){ HOST.wake.release().catch(() => {}); HOST.wake = null; }
+  if(NET.server && NET.server.url === 'p2p:' + HOST.code) disconnectServer();
+  render();
+}
+// Phones pause pages whose screen turns off, which would close the village, so keep the screen awake while hosting.
+async function keepAwake(){
+  if(!HOST.core || HOST.wake || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  try{ HOST.wake = await navigator.wakeLock.request('screen'); HOST.wake.addEventListener('release', () => { HOST.wake = null; }); }catch(e){}
+}
+document.addEventListener('visibilitychange', keepAwake);
+const inviteLink = () => location.origin + location.pathname + '?join=' + HOST.code;
+
 async function initServers(){
   const known = new Map();
   // A server that serves the game itself is joined automatically.
@@ -2148,28 +2445,48 @@ async function initServers(){
     try{ const r = await fetch('servers.json', {cache:'no-store'}); const j = r.ok && await r.json(); for(const x of (j && j.servers) || []){ const u = normServerUrl(x.url); if(u && !known.has(u)) known.set(u, {url:u, name:String(x.name || u).slice(0, 40), desc:String(x.description || '').slice(0, 120), community:true}); } }catch(e){}
   }
   NET.list = [...known.values()];
-  const saved = lsGet(SERVER_KEY, ''); if(saved) connectServer(saved, true);
+  // An invite link (?join=CODE) joins that village; a host that was hosting picks up where it left off.
+  const q = new URLSearchParams(location.search), join = normServerUrl(q.get('join') || '');
+  if(q.has('join')){ q.delete('join'); try{ history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }catch(e){} }
+  const host = lsGet(HOST_KEY, {}) || {};
+  if(host.on && !join) startHosting();
+  else if(join) connectServer(join);
+  else { const saved = lsGet(SERVER_KEY, ''); if(saved) connectServer(saved, true); }
   if(UI.screen === 'online') render();
 }
 function serverRows(){
   const mine = lsGet(SERVERS_KEY, []), all = [...NET.list], seen = new Set(all.map(x => x.url));
+  if(HOST.core) seen.add('p2p:' + HOST.code);
   for(const x of mine) if(x && x.url && !seen.has(x.url)){ all.push({url:x.url, name:x.name, saved:true}); seen.add(x.url); }
   return all;
+}
+function hostHTML(){
+  if(!HOST.core) return `<div class="srv-hostbox"><h4>📱 Host on this device</h4>
+    <p class="muted">Turn this phone, tablet or computer into a village. Friends join with a code, nothing to install. It stays open while this page does, so keep the screen on.</p>
+    <button class="btn primary" data-act="hostStart">Start hosting</button></div>`;
+  const n = HOST.peers.size, st = HOST.status;
+  return `<div class="srv-hostbox on"><h4>📱 You're hosting</h4>
+    <div class="srv-now"><span class="srv-dot ${st === 'online' ? 'online' : st === 'error' ? 'offline' : 'connecting'}"></span><div><b>Village code <span class="host-code">${HOST.code}</span></b>
+      <small>${st === 'online' ? `Open for players, ${n} connected${HOST.wake ? ', screen kept awake' : ''}` : st === 'error' ? esc(HOST.err) : 'Opening the gates…'}</small></div></div>
+    <div class="res-acts" style="margin-top:8px"><button class="btn sm primary" data-act="hostShare">${navigator.share ? 'Share invite' : 'Copy invite link'}</button><button class="btn sm bad" data-act="hostStop">Stop hosting</button></div>
+    <small class="muted" style="display:block;margin-top:6px">Friends tap the invite link, or type the code into the box above. Keep this page open and your screen on; if the page closes, the village closes too (its leaderboard is kept for next time).</small></div>`;
 }
 function serversHTML(){
   if(NET.mode === 'claude') return '';
   const sv = NET.server, rows = serverRows();
   const status = !sv ? '<p class="muted">You\'re playing offline. Join a server to meet other ninja, climb a shared leaderboard and raid together.</p>'
-    : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, ${NET.peers.filter(p => !p.isMe).length} other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
+    : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, <span class="net-n">${NET.peers.filter(p => !p.isMe).length}</span> other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
   return `<div class="panel srv"><h3>🌐 Servers</h3>${status}
-    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || x.url)}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
-    <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Server address, e.g. wss://ninja.example.com" autocomplete="off" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
-    <details class="srv-host"><summary>Host your own server</summary>
+    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : /^p2p:/.test(x.url) ? '📱' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || (/^p2p:/.test(x.url) ? 'Village code ' + x.url.slice(4) : x.url))}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
+    <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Village code or server address" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
+    ${hostHTML()}
+    <details class="srv-host"><summary>Run a dedicated server (always on)</summary>
       <p>The server is one file with no dependencies. With <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 18+</a>:</p>
       <pre>git clone https://github.com/Mofferato/tsukimori
 cd tsukimori
 node server/server.js</pre>
       <p>Friends on your network open <code>http://&lt;your-ip&gt;:8787</code> and are joined automatically. To let anyone in, run it on a host with HTTPS (Render, Fly.io, Railway or any VPS; a <code>Dockerfile</code> is included), then share its <code>wss://</code> address or add it to <code>servers.json</code> with a pull request.</p>
+      <p>On an Android phone you can run it in <a href="https://termux.dev" target="_blank" rel="noopener">Termux</a>: <code>pkg install nodejs git</code>, then the commands above.</p>
       <p class="muted">Set <code>SERVER_NAME</code> and <code>MOTD</code> to name your village and greet players.</p></details></div>`;
 }
 function netChanged(){
@@ -2183,6 +2500,7 @@ function netChanged(){
   if(el('net-hire')) el('net-hire').innerHTML = hireHTML();
   if(el('net-fame')) el('net-fame').innerHTML = fameHTML();
   if(el('net-count')) el('net-count').textContent = NET.peers.filter(p => !p.isMe).length;
+  document.querySelectorAll('.net-n').forEach(x => { x.textContent = NET.peers.filter(p => !p.isMe).length; });
 }
 function presence(){
   if(!NET.room || !S || !S.char) return;
@@ -2369,6 +2687,7 @@ function allocRecruit(r, a){
   const t = (a.hp | 0) + (a.cp | 0) + (a.agi | 0); if(t > r.points || t < 0) throw new Error(`${r.name} has ${r.points} points`);
   for(const k of ['hp','cp','agi']){ const v = Math.max(0, a[k] | 0); r.alloc[k] += v; r.points -= v; } return charStats(r);
 }
+// Splits unspent points by element (fire leans agility, earth health, and so on). Works for the leader too.
 function autoAllocRecruit(r){
   const w = {fire:[1,1,2], wind:[1,1,3], lightning:[1,2,2], earth:[3,1,1], water:[2,2,1]}[r.element], t = w[0] + w[1] + w[2];
   const a = {hp:Math.round(r.points * w[0] / t), cp:Math.round(r.points * w[1] / t)}; a.agi = r.points - a.hp - a.cp; return a;
@@ -2705,7 +3024,7 @@ function charScreen(){
         ${c.clan ? `<span class="chip" style="--c:${CLAN[c.clan.id].color}">${CLAN[c.clan.id].crest} ${CLAN[c.clan.id].name}</span>` : ''}
         ${c.pet ? `<span class="chip" style="--c:${ELEMENTS[PET[c.pet].el].color}">🐾 ${PET[c.pet].name}</span>` : ''}</div>
       <div class="panel">
-        <div class="pts">${c.points ? `<b>${c.points}</b> stat points to spend` : 'No unspent points'} <small class="muted">(you earn ${POINTS_PER_LEVEL} per level)</small></div>
+        <div class="pts">${c.points ? `<b>${c.points}</b> stat points to spend <button class="btn sm" data-act="autoAlloc">Auto-assign</button>` : 'No unspent points'} <small class="muted">(you earn ${POINTS_PER_LEVEL} per level)</small></div>
         ${row('hp','❤️','Health', st.maxHp, '+10 max HP per point')}
         ${row('cp','🔷','Chakra', st.maxCp, '+6 max Chakra per point')}
         ${row('agi','💨','Agility', st.agi, '+2 Agility per point: act sooner, dodge and crit more')}
@@ -2728,8 +3047,8 @@ function resultsScreen(){
         ${r.items.map(it => `<div class="res-row">${ITEM[it.id].icon} ${ITEM[it.id].name}${it.first ? ' <span class="chip" style="--c:var(--gold)">first clear</span>' : ''}</div>`).join('')}
         ${r.lines.map(l => `<div class="res-row" style="font-size:14px">${l}</div>`).join('')}
         <div class="xpline"><span>Lv ${c.level}</span><span class="bar xp"><i style="width:${xpPct(c)}%"></i></span><span>${c.level >= MAX_LEVEL ? 'MAX' : `${c.xp}/${xpToNext(c.level)}`}</span></div></div></div>
-    ${r.ups.length ? `<div class="panel hl-panel">⬆️ Reached level ${c.level}! You have ${c.points} stat points to spend.</div>` : ''}
-    ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<button class="btn sm primary" data-act="manageR" data-arg="${m.id}">Spend ${esc(m.name)}'s points</button>` : ''}</div>`; }).join('')}
+    ${r.ups.length ? `<div class="panel hl-panel sq-up"><div>⬆️ Reached level ${c.level}! ${c.points ? `You have ${c.points} stat points to spend.` : 'Points spent.'}</div>${c.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAlloc">Auto-assign</button><button class="btn sm" data-act="go" data-arg="character">Choose myself</button></span>` : ''}</div>` : ''}
+    ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAllocR" data-arg="${m.id}">Auto-assign</button><button class="btn sm" data-act="manageR" data-arg="${m.id}">Choose myself</button></span>` : ''}</div>`; }).join('')}
     ${(r.ach || []).map(a => `<div class="panel hl-panel">🏅 Achievement: ${a.icon} ${a.name}! ${a.reward.gold ? `+${a.reward.gold} gold ` : ''}${a.reward.shards ? `+${a.reward.shards} shards` : ''}</div>`).join('')}
     ${r.newRank ? `<div class="panel hl-panel">🎖️ New rank: ${r.newRank.name}. ${r.newRank.desc}</div>` : ''}
     ${mine.length ? `<div class="panel hl-panel">📖 New at the Academy: ${mine.map(s => s.icon + ' ' + s.name).join(', ')}</div>` : ''}
@@ -2737,8 +3056,7 @@ function resultsScreen(){
     <div class="res-btns">
       <button class="btn primary" data-act="go" data-arg="hub">Return to the village</button>
       ${r.retry ? `<button class="btn" data-act="${r.retry.act}" data-arg="${r.retry.arg}">${r.retry.label}</button>` : ''}
-      ${c.points ? `<button class="btn" data-act="go" data-arg="character">Spend points</button>` : ''}
-      ${!c.points && (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="manageR" data-arg="${r.squadUps.find(u => (recruitById(u.id) || {}).points).id}">Spend squad points</button>` : ''}
+      ${c.points || (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="autoAllocAll">Auto-assign all points</button>` : ''}
     </div></section>`;
 }
 function systemScreen(){
@@ -3007,6 +3325,8 @@ const ACT = {
     const v = Math.floor((it.price || 100) / 2); addInv(a, -1); S.char.gold += v; persist(); render(); toast(`Sold ${it.name} for ${v} gold`);
   },
   alloc: a => { const c = S.char; if(!c.points) return; c.alloc[a]++; c.points--; persist(); render(); },
+  autoAlloc: () => { const c = S.char; if(!c.points) return; allocRecruit(c, autoAllocRecruit(c)); persist(); render(); toast('Points assigned'); },
+  autoAllocAll: () => { let n = 0; for(const x of [S.char, ...S.squad.roster]) if(x.points){ allocRecruit(x, autoAllocRecruit(x)); n++; } persist(); render(); toast(n > 1 ? `Points assigned for ${n} ninja` : 'Points assigned'); },
   respec: () => { const c = S.char; c.points += c.alloc.hp + c.alloc.cp + c.alloc.agi; c.alloc = {hp:0, cp:0, agi:0}; persist(); render(); toast('Points refunded'); },
   askNew: () => showModal('Start a new game?', '<p>This deletes the save in this browser. Export it first if you want to keep it.</p>', [{label:'Keep playing', act:'closeModal'}, {label:'Delete and start over', act:'doNewGame', cls:'bad'}]),
   doNewGame: () => { try{ localStorage.removeItem(SAVE_KEY); }catch(e){} S = null; UI.create = defaultCreate(); go('create'); },
@@ -3057,6 +3377,14 @@ const ACT = {
   srvJoin: a => connectServer(a),
   srvAdd: () => { const i = $('#srv-in'); if(i && i.value.trim()) connectServer(i.value); },
   srvLeave: () => { disconnectServer(); render(); toast('Left the server'); },
+  hostStart: () => startHosting(),
+  hostStop: () => showModal('Stop hosting?', '<p>Everyone in your village is disconnected. The leaderboard is kept on this device for next time.</p>', [{label:'Keep hosting', act:'closeModal'}, {label:'Stop hosting', act:'doHostStop', cls:'bad'}]),
+  doHostStop: () => { closeModal(); stopHosting(); toast('Your village is closed'); },
+  hostShare: () => {
+    const url = inviteLink(), text = `Join my Tsukimori village! Code ${HOST.code}`;
+    if(navigator.share) return navigator.share({title:'Tsukimori', text, url}).catch(() => {});
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => toast('Invite link copied'), () => toast(url)); else toast(url);
+  },
   srvForget: a => { lsSet(SERVERS_KEY, lsGet(SERVERS_KEY, []).filter(x => x.url !== a)); render(); },
   commClaim: a => { const i = +a, g = COMMUNITY_GOALS[i], ev = S.event; ev.commClaimed = ev.commClaimed || []; if(ev.commClaimed.includes(i) || raidTotals().total < g.pct) return; ev.commClaimed.push(i); S.shards += g.shards; persist(); render(); toast(`+${g.shards} Moon Shards`); },
   petBuy: a => {

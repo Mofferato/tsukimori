@@ -4,6 +4,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY index.html servers.json ./
 COPY server/server.js server/
+COPY src/05a_hostcore.js src/
 ENV PORT=8787 DATA_FILE=/data/tsukimori.json
 RUN mkdir -p /data && chown node:node /data
 VOLUME /data

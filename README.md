@@ -13,7 +13,7 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 - **Character creation**: body, 4 hairstyles, hair, outfit, eye and skin colors, and a starting element.
 - **Turn-based combat** for up to 3 vs 3: Agility-based turn order, Chakra and cooldowns, burn, bleed, stun, slow, weaken, expose, empower, guard, haste and regen, floating damage numbers, auto-battle and a 1–3× speed toggle.
 - **Element wheel**: Fire > Wind > Lightning > Earth > Water > Fire (+25% / −25%).
-- **Progression**: level cap 60, 3 stat points per level, 5 ranks (Lantern Pupil to Eclipse Warden), 35 player techniques over 7 tiers.
+- **Progression**: level cap 60, 3 stat points per level (spend them yourself or tap Auto-assign, also offered on the battle results screen), 5 ranks (Lantern Pupil to Eclipse Warden), 35 player techniques over 7 tiers.
 - **22 missions** across D, C, B, A and S ranks, 32 enemies, boss enrage phases and first-clear rewards.
 - **Shop and gear**: 40+ items that change how your ninja looks.
 - **Squad Lodge**: recruit up to 6 ninja, bring 2 into every battle and command their turns yourself. Train them, give them gear and spend their stat points. When a squadmate levels up you get a notice with a shortcut to their stat page, and they learn each new technique of their element for free, swapping it in for their weakest one (or turn that off and choose yourself).
@@ -23,7 +23,7 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 - **Crimson Moon**: a weekly rotating boss with shared HP, 3 tries a day, milestones and a Moon Shard shop.
 - **Journal**: daily quests, a login streak and 15 achievements.
 - **Momo the guide**: answers questions and acts for you (spend points, buy and equip gear, learn techniques, adopt pets, join clans, claim rewards, start battles), with undo.
-- **Multiplayer servers**: join a server from the Village Square, or host your own with one command (see below).
+- **Multiplayer servers**: join a server from the Village Square, host a village right from your phone with a code, or run a dedicated server with one command (see below).
 - **Save/load**: autosave, JSON export/import, and cloud save when online.
 - **Sound effects** from a tiny WebAudio synth, light and dark themes, mobile-first layout, keyboard support and reduced motion.
 
@@ -40,9 +40,19 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 
 ## Multiplayer servers
 
-Open the **Village Square** and use the **Servers** panel to join one. The list shows servers from [`servers.json`](servers.json), any you've joined before, and the server you're on if it served the game. Paste an address (`wss://ninja.example.com`) to join any other server. You can leave at any time and keep playing offline.
+Open the **Village Square** and use the **Servers** panel to join one. The list shows servers from [`servers.json`](servers.json), any you've joined before, and the server you're on if it served the game. Type a village code (`9WX4MF`) or paste an address (`wss://ninja.example.com`) to join any other. You can leave at any time and keep playing offline.
 
-### Host your own
+### Host on your phone (no install)
+
+In the Servers panel, tap **Start hosting**. Your device becomes the village and you get a code and an invite link to share. Friends open the link (or type the code) on the GitHub Pages site and connect straight to your device over WebRTC.
+
+- A free public [PeerJS](https://peerjs.com) service helps players find your device; after that, game traffic goes directly between devices (or through PeerJS's relay when networks block direct connections).
+- The village is open only while the page is open. The game keeps your screen awake while hosting; if you switch apps or lock the phone, the browser may pause the page and players get disconnected until you come back.
+- Up to 12 players. The leaderboard and raid totals are kept on your device for the next time you host, under the same code.
+
+For a village that is always open, run a dedicated server instead.
+
+### Run a dedicated server
 
 The server is a single file with no dependencies ([`server/server.js`](server/server.js)). It serves the game and multiplayer on one port.
 
@@ -53,6 +63,8 @@ node server/server.js          # Node.js 18 or newer
 ```
 
 Open `http://localhost:8787`. Friends on your network open `http://<your-ip>:8787` and join automatically.
+
+On an Android phone you can run the same server in [Termux](https://termux.dev): `pkg install nodejs git`, then the commands above. Keep Termux running (its notification has a wake-lock option).
 
 To open it to everyone, run it somewhere with HTTPS so the GitHub Pages build can connect over `wss://`. A page on HTTPS can't join a plain `ws://` server, so HTTPS is required for that.
 
@@ -76,20 +88,21 @@ To list your server for everyone, open a pull request adding it to `servers.json
 { "servers": [ { "name": "Moonlit Grove", "url": "wss://ninja.example.com", "description": "EU, friendly" } ] }
 ```
 
-**How it works.** Players get a random secret stored in their browser. The server derives their ID from it and only lets them write their own leaderboard entry, raid damage and hires, and read their own cloud save. Shouts and emotes are length-limited and rate-limited, and each connection has a message budget. Stats come from the player's browser, so a determined player could fake their own numbers; treat the leaderboard as friendly competition.
+**How it works.** Both kinds of host run the same rules from [`src/05a_hostcore.js`](src/05a_hostcore.js). Players get a random secret stored in their browser. The server derives their ID from it and only lets them write their own leaderboard entry, raid damage and hires, and read their own cloud save. Shouts and emotes are length-limited and rate-limited, and each connection has a message budget. Stats come from the player's browser, so a determined player could fake their own numbers; treat the leaderboard as friendly competition.
 
 ## Project layout
 
 ```
 index.html        the built game (what GitHub Pages serves)
 servers.json      public server list shown in the Village Square
-server/server.js  the multiplayer server (no dependencies)
+server/server.js  the dedicated multiplayer server (no dependencies)
 Dockerfile        container for the server
 build.sh          concatenates src/ into index.html
 src/01_head.html  markup and all CSS (theme tokens for light and dark)
 src/02_data.js    content tables: elements, statuses, skills, enemies, items, missions, pets, clans, event
 src/03_art.js     SVG sprites (chibi ninja, beasts, spirits, puppets, serpents, birds) and the village map
 src/04_engine.js  state, saves, stats, units, battle engine, runs (missions, arena, event)
+src/05a_hostcore.js  multiplayer host rules, shared by server/server.js and "Host on this device"
 src/05_extra.js   quests, achievements, sound, auto-battle, Momo the guide, multiplayer (claude.ai and server backends)
 src/06_squad.js   recruiting, training and managing squadmates
 src/07_ui.js      screens, battle view and input actions

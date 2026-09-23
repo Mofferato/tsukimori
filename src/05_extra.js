@@ -252,8 +252,7 @@ async function byokAsk(messages, tools){
 /* Offline helper: rule-based advice with one-tap actions (works anywhere, no AI needed). */
 function suggestions(){
   const c = S.char, out = [], st = charStats(c); syncDaily(); syncEvent();
-  if(c.points){ const w = {fire:[1,1,2], wind:[1,1,3], lightning:[1,2,2], earth:[3,1,1], water:[2,2,1]}[c.element], t = w[0] + w[1] + w[2];
-    const a = {hp:Math.round(c.points * w[0] / t), cp:Math.round(c.points * w[1] / t)}; a.agi = c.points - a.hp - a.cp;
+  if(c.points){ const a = autoAllocRecruit(c);
     out.push({text:`Spend your ${c.points} stat points (${a.hp} HP, ${a.cp} Chakra, ${a.agi} Agility suits a ${ELEMENTS[c.element].name} ninja).`, tool:'allocate_points', input:a}); }
   const claim = S.daily.quests.some(q => !q.claimed && questProgress(q) >= q.n) || EVENT_MILESTONES.some((m, i) => !S.event.claimed.includes(i) && S.event.dmg / S.event.pool * 100 >= m.pct);
   if(claim) out.push({text:'You have rewards waiting to be claimed.', tool:'claim_rewards', input:{}});
@@ -357,32 +356,120 @@ function serverToken(url){
   const t = lsGet(TOKENS_KEY, {}); if(t[url]) return t[url];
   const a = new Uint8Array(24); crypto.getRandomValues(a); t[url] = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); lsSet(TOKENS_KEY, t); return t[url];
 }
-// "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL
+// "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL; "ABC123" or "p2p:ABC123" → a device-hosted village
+const P2P_CODE = /^[A-Z2-9]{4,8}$/;
 function normServerUrl(u){
   u = String(u || '').trim(); if(!u) return '';
+  const code = u.replace(/^p2p:/i, '').toUpperCase();
+  if(/^p2p:/i.test(u) || (P2P_CODE.test(code) && !/[.:/]/.test(u))) return P2P_CODE.test(code) ? 'p2p:' + code : '';
   if(/^https?:\/\//i.test(u)) u = u.replace(/^http/i, 'ws');
   else if(!/^wss?:\/\//i.test(u)) u = (location.protocol === 'https:' ? 'wss://' : 'ws://') + u;
   try{ const x = new URL(u); return x.protocol + '//' + x.host + (x.pathname === '/' ? '' : x.pathname.replace(/\/$/, '')); }catch(e){ return ''; }
 }
-const infoUrl = ws => ws.replace(/^ws/i, 'http').replace(/(\/\/[^/]+).*$/, '$1') + '/api/info';
-function wsBackend(url, onStatus){
-  let ws = null, rid = 0, subN = 0, closed = false, retry = 0, presenceData = null, beat = null;
+
+/* Transports carry text messages. Each takes handlers {onopen, onmessage(text), onclose} and returns {send(text), close(), ready()}. */
+function wsTransport(url){
+  return h => { const ws = new WebSocket(url); ws.onopen = h.onopen; ws.onmessage = e => h.onmessage(e.data); ws.onclose = h.onclose;
+    return {send:t => ws.send(t), close:() => ws.close(), ready:() => ws.readyState === 1}; };
+}
+// The host plays in their own village without any network in between.
+function loopTransport(){
+  return h => {
+    if(!HOST.core){ setTimeout(h.onclose, 0); return {send(){}, close(){}, ready:() => false}; }
+    let open = true;
+    const shut = () => { if(!open) return; open = false; conn.drop(); HOST.loops.delete(tr); setTimeout(h.onclose, 0); };
+    const conn = HOST.core.connect(o => { if(open) setTimeout(() => open && h.onmessage(JSON.stringify(o)), 0); }, shut);
+    const tr = {send:t => { try{ conn.receive(JSON.parse(t)); }catch(e){} }, close:shut, ready:() => open};
+    HOST.loops.add(tr); setTimeout(h.onopen, 0); return tr;
+  };
+}
+
+/* ---- WebRTC for device-hosted villages ----
+   Players find the host through a public PeerJS broker (it only relays the connection handshake),
+   then talk directly over a data channel. Big messages are split so they fit a data channel. */
+const SIGNAL_URL = () => lsGet('tsukimori_signal', '') || 'wss://0.peerjs.com:443/peerjs';
+const ICE = {iceServers:[{urls:'stun:stun.l.google.com:19302'}, {urls:['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username:'peerjs', credential:'peerjsp'}]};
+const rid6 = (n, abc) => { const a = new Uint8Array(n); crypto.getRandomValues(a); return Array.from(a, b => abc[b % abc.length]).join(''); };
+const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', ID_ABC = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const hostPeerId = code => 'tsukimori-' + code.toLowerCase();
+// A connection to the broker as `id`. onMsg gets {type, src, payload}; onStatus gets 'open' | 'taken' | 'closed'.
+function signalConn(id, onMsg, onStatus){
+  let ws, beat, done = false;
+  try{ ws = new WebSocket(`${SIGNAL_URL()}?key=peerjs&id=${encodeURIComponent(id)}&token=${rid6(10, ID_ABC)}&version=1.5.4`); }catch(e){ setTimeout(() => onStatus('closed'), 0); return {send(){}, close(){}}; }
+  ws.onmessage = e => { let m; try{ m = JSON.parse(e.data); }catch(err){ return; }
+    if(m.type === 'OPEN') onStatus('open'); else if(m.type === 'ID-TAKEN'){ done = true; ws.close(); onStatus('taken'); } else onMsg(m); };
+  ws.onopen = () => { beat = setInterval(() => ws.readyState === 1 && ws.send('{"type":"HEARTBEAT"}'), 5000); };
+  ws.onclose = () => { clearInterval(beat); if(!done){ done = true; onStatus('closed'); } };
+  return {send:m => { if(ws.readyState === 1) ws.send(JSON.stringify(m)); }, close:() => { done = true; clearInterval(beat); ws.close(); }};
+}
+const CHUNK = 16000;
+function dcSend(dc, t){
+  if(dc.readyState !== 'open') return;
+  if(t.length <= CHUNK) return dc.send(t);
+  const id = rid6(6, ID_ABC), n = Math.ceil(t.length / CHUNK);
+  for(let i = 0; i < n; i++) dc.send(`~${id}:${i}:${n}:` + t.slice(i * CHUNK, (i + 1) * CHUNK));
+}
+function dcReader(cb){
+  const parts = {};
+  return t => {
+    if(t[0] !== '~') return cb(t);
+    const m = /^~(\w+):(\d+):(\d+):/.exec(t); if(!m) return;
+    const [all, id, i, n] = m, p = parts[id] = parts[id] || []; p[+i] = t.slice(all.length);
+    if(p.filter(x => x != null).length === +n){ delete parts[id]; cb(p.join('')); }
+  };
+}
+function rtcTransport(code){
+  return h => {
+    let pc = null, dc = null, sig = null, done = false;
+    const cid = rid6(10, ID_ABC), early = [];
+    const fail = () => { if(done) return; done = true; clearTimeout(timer); if(sig) sig.close(); try{ if(pc) pc.close(); }catch(e){} h.onclose(); };
+    const timer = setTimeout(fail, 25000);
+    async function start(){
+      pc = new RTCPeerConnection(ICE);
+      dc = pc.createDataChannel('tsukimori', {ordered:true});
+      dc.onopen = () => { clearTimeout(timer); sig.close(); h.onopen(); };
+      dc.onmessage = (read => e => read(e.data))(dcReader(h.onmessage));
+      dc.onclose = fail;
+      pc.onconnectionstatechange = () => { if(['failed', 'closed'].includes(pc.connectionState)) fail(); };
+      pc.onicecandidate = e => { if(e.candidate) sig.send({type:'CANDIDATE', dst:hostPeerId(code), payload:{cid, candidate:e.candidate}}); };
+      await pc.setLocalDescription(await pc.createOffer());
+      sig.send({type:'OFFER', dst:hostPeerId(code), payload:{cid, sdp:pc.localDescription}});
+    }
+    sig = signalConn('tsukimori-c' + rid6(12, ID_ABC), async m => {
+      const p = m.payload || {};
+      if(m.type === 'EXPIRE' || m.type === 'ERROR') return fail();
+      if(p.cid !== cid || !pc) return;
+      try{
+        if(m.type === 'ANSWER'){ await pc.setRemoteDescription(p.sdp); for(const c of early.splice(0)) pc.addIceCandidate(c).catch(() => {}); }
+        else if(m.type === 'CANDIDATE'){ if(pc.remoteDescription) pc.addIceCandidate(p.candidate).catch(() => {}); else early.push(p.candidate); }
+      }catch(e){ fail(); }
+    }, st => { if(st === 'open') start().catch(fail); else if(!dc || dc.readyState !== 'open') fail(); });
+    return {send:t => dc && dcSend(dc, t), close:fail, ready:() => !!dc && dc.readyState === 'open'};
+  };
+}
+
+/* ---- The client side of the server protocol, over any transport ---- */
+function protoBackend(url, transport, onStatus){
+  let tr = null, rid = 0, subN = 0, closed = false, retry = 0, presenceData = null, beat = null;
   const me = {uid:null, peer:null}, pending = new Map(), subs = new Map(), handlers = {}, peerCbs = [];
-  const send = o => { if(ws && ws.readyState === 1){ ws.send(JSON.stringify(o)); return true; } return false; };
+  const send = o => { if(tr && tr.ready()){ tr.send(JSON.stringify(o)); return true; } return false; };
   const req = o => new Promise((resolve, reject) => {
     const id = ++rid; o.rid = id; if(!send(o)) return reject(new Error('Not connected to the server'));
     pending.set(id, {resolve, reject}); setTimeout(() => { if(pending.delete(id)) reject(new Error('The server did not answer')); }, 10000);
   });
   function open(){
     onStatus('connecting');
-    try{ ws = new WebSocket(url); }catch(e){ onStatus('error', {err:e.message}); return; }
-    ws.onopen = () => send({t:'hello', v:1, token:serverToken(url)});
-    ws.onmessage = e => { let m; try{ m = JSON.parse(e.data); }catch(err){ return; } recv(m); };
-    ws.onclose = () => {
-      ws = null; clearInterval(beat); for(const p of pending.values()) p.reject(new Error('Disconnected')); pending.clear();
-      if(closed) return; peerCbs.forEach(cb => cb({peers:[]}));
-      const wait = Math.min(30000, 1000 * 2 ** retry++); onStatus('offline', {retryIn:wait}); setTimeout(() => { if(!closed) open(); }, wait);
-    };
+    let mine = null;
+    try{
+      mine = tr = transport({
+        onopen:() => send({t:'hello', v:1, token:serverToken(url)}),
+        onmessage:t => { let m; try{ m = JSON.parse(t); }catch(err){ return; } recv(m); },
+        onclose:() => {
+          if(tr !== mine) return; tr = null; clearInterval(beat); for(const p of pending.values()) p.reject(new Error('Disconnected')); pending.clear();
+          if(closed) return; peerCbs.forEach(cb => cb({peers:[]}));
+          const wait = Math.min(30000, 1000 * 2 ** retry++); onStatus('offline', {retryIn:wait}); setTimeout(() => { if(!closed) open(); }, wait);
+        }});
+    }catch(e){ onStatus('error', {err:e.message}); }
   }
   function recv(m){
     if(m.t === 'welcome'){
@@ -403,14 +490,19 @@ function wsBackend(url, onStatus){
   const room = {onPeers:cb => { peerCbs.push(cb); }, on:(ev, cb) => { (handlers[ev] = handlers[ev] || []).push(cb); },
     emit:(ev, data) => req({t:'emit', ev, data}), presence:data => { presenceData = data; send({t:'presence', data}); return Promise.resolve(); }};
   setTimeout(open, 0); // after the caller has stored the backend
-  return {db, room, me, close(){ closed = true; clearInterval(beat); if(ws) ws.close(); }};
+  return {db, room, me, close(){ closed = true; clearInterval(beat); if(tr) tr.close(); }};
+}
+function transportFor(url){
+  if(/^p2p:/.test(url)) return HOST.core && url === 'p2p:' + HOST.code ? loopTransport() : rtcTransport(url.slice(4));
+  return wsTransport(url);
 }
 function connectServer(url, quiet){
-  url = normServerUrl(url); if(!url) return quiet || toast('That doesn\'t look like a server address');
+  url = normServerUrl(url); if(!url) return quiet || toast('That doesn\'t look like a server address or village code');
   if(location.protocol === 'https:' && /^ws:/i.test(url)) return quiet || toast('This page is on HTTPS, so it can only join wss:// servers. Open the game from the server\'s own address instead.');
+  if(/^p2p:/.test(url) && !window.RTCPeerConnection && !(HOST.core && url === 'p2p:' + HOST.code)) return quiet || toast('This browser can\'t join device-hosted villages');
   disconnectServer(true);
   NET.server = {url, status:'connecting', info:null};
-  const be = wsBackend(url, (st, m) => {
+  const be = protoBackend(url, transportFor(url), (st, m) => {
     if(!NET.server || NET.backend !== be) return;
     NET.server.status = st;
     if(st === 'online'){
@@ -433,6 +525,90 @@ function disconnectServer(keepChoice){
 function rememberServer(url, name){
   const list = lsGet(SERVERS_KEY, []).filter(x => x && x.url !== url); list.unshift({url, name}); lsSet(SERVERS_KEY, list.slice(0, 12));
 }
+
+/* ---- Host on this device ----
+   Runs the same host core as server/server.js inside this page. Players reach it over WebRTC with the
+   village code; the host joins through a loopback. The village lives only while this page is open. */
+const HOST_KEY = 'tsukimori_host', HOST_DATA_KEY = 'tsukimori_host_data';
+const HOST = {core:null, code:'', status:'off', err:'', sig:null, peers:new Map(), loops:new Set(), wake:null, saveT:null, retry:0};
+const hexOf = buf => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+const hostPlayers = () => HOST.core ? HOST.core.info().players : 0;
+function startHosting(){
+  if(HOST.core) return;
+  if(!window.RTCPeerConnection || !(crypto && crypto.subtle)) return toast('This browser can\'t host. Try Chrome, Safari or Firefox over HTTPS.');
+  const cfg = lsGet(HOST_KEY, {}) || {};
+  HOST.code = cfg.code || rid6(6, CODE_ABC);
+  const name = (cfg.name || (S && S.char ? `${S.char.name}'s village` : 'Pocket village')).slice(0, 40);
+  lsSet(HOST_KEY, {code:HOST.code, name, on:true});
+  HOST.core = createHostCore({name, motd:'Hosted on a ninja\'s own device. It closes when they do!', maxPlayers:12,
+    maxDocs:{echoes:300, hires:300, raidhits:300, saves:12}, maxSave:150000, store:lsGet(HOST_DATA_KEY, null),
+    persist:store => { clearTimeout(HOST.saveT); HOST.saveT = setTimeout(() => { try{ localStorage.setItem(HOST_DATA_KEY, JSON.stringify(store)); }catch(e){} }, 1500); },
+    hashId:async t => hexOf(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t))), randomId:() => rid6(10, ID_ABC)});
+  HOST.status = 'starting'; HOST.err = '';
+  hostSignal(); keepAwake();
+  connectServer('p2p:' + HOST.code, true);
+  render();
+}
+function hostSignal(){
+  if(!HOST.core) return;
+  HOST.sig = signalConn(hostPeerId(HOST.code), hostOnSignal, st => {
+    if(!HOST.core) return;
+    if(st === 'open'){ HOST.status = 'online'; HOST.retry = 0; }
+    else if(st === 'taken'){ HOST.status = 'error'; HOST.err = 'That village code is busy (is it open in another tab?). Retrying…'; }
+    if(st !== 'open'){ // keep trying to stay listed with the broker; players already connected are unaffected
+      if(st === 'closed' && HOST.status !== 'error'){ HOST.status = 'error'; HOST.err = 'Can\'t reach the matchmaking service. Retrying…'; }
+      setTimeout(() => { if(HOST.core) hostSignal(); }, Math.min(30000, 2000 * 2 ** HOST.retry++));
+    }
+    if(UI.screen === 'online') render();
+  });
+}
+async function hostOnSignal(m){
+  const p = m.payload || {}, src = m.src; if(!HOST.core || !src || !p.cid) return;
+  const key = src + '/' + p.cid;
+  if(m.type === 'OFFER'){
+    if(HOST.core.full() || HOST.peers.size >= 12) return;
+    const pc = new RTCPeerConnection(ICE), rec = {pc, conn:null, early:[]}; HOST.peers.set(key, rec);
+    const drop = () => { if(!HOST.peers.has(key)) return; HOST.peers.delete(key); if(rec.conn) rec.conn.drop(); try{ pc.close(); }catch(e){} if(UI.screen === 'online') render(); };
+    pc.onicecandidate = e => { if(e.candidate && HOST.sig) HOST.sig.send({type:'CANDIDATE', dst:src, payload:{cid:p.cid, candidate:e.candidate}}); };
+    pc.onconnectionstatechange = () => { if(['failed', 'closed', 'disconnected'].includes(pc.connectionState)) setTimeout(() => { if(pc.connectionState !== 'connected') drop(); }, pc.connectionState === 'disconnected' ? 8000 : 0); };
+    pc.ondatachannel = e => {
+      const dc = e.channel;
+      dc.onopen = () => { rec.conn = HOST.core.connect(o => dcSend(dc, JSON.stringify(o)), () => { dc.close(); drop(); }); if(UI.screen === 'online') render(); };
+      dc.onmessage = (read => e2 => read(e2.data))(dcReader(t => { let msg; try{ msg = JSON.parse(t); }catch(err){ return; } if(rec.conn) rec.conn.receive(msg); }));
+      dc.onclose = drop;
+    };
+    setTimeout(() => { if(!rec.conn) drop(); }, 30000);
+    try{
+      await pc.setRemoteDescription(p.sdp);
+      for(const c of rec.early.splice(0)) pc.addIceCandidate(c).catch(() => {});
+      await pc.setLocalDescription(await pc.createAnswer());
+      HOST.sig.send({type:'ANSWER', dst:src, payload:{cid:p.cid, sdp:pc.localDescription}});
+    }catch(e){ drop(); }
+  } else if(m.type === 'CANDIDATE'){
+    const rec = HOST.peers.get(key); if(!rec) return;
+    if(rec.pc.remoteDescription) rec.pc.addIceCandidate(p.candidate).catch(() => {}); else rec.early.push(p.candidate);
+  }
+}
+function stopHosting(){
+  if(!HOST.core) return;
+  const cfg = lsGet(HOST_KEY, {}) || {}; lsSet(HOST_KEY, Object.assign(cfg, {on:false}));
+  if(HOST.sig) HOST.sig.close();
+  for(const rec of HOST.peers.values()){ try{ rec.pc.close(); }catch(e){} }
+  for(const tr of [...HOST.loops]) tr.close();
+  if(HOST.saveT){ clearTimeout(HOST.saveT); try{ localStorage.setItem(HOST_DATA_KEY, JSON.stringify(HOST.core.store)); }catch(e){} }
+  Object.assign(HOST, {core:null, status:'off', err:'', sig:null, peers:new Map(), loops:new Set(), retry:0});
+  if(HOST.wake){ HOST.wake.release().catch(() => {}); HOST.wake = null; }
+  if(NET.server && NET.server.url === 'p2p:' + HOST.code) disconnectServer();
+  render();
+}
+// Phones pause pages whose screen turns off, which would close the village, so keep the screen awake while hosting.
+async function keepAwake(){
+  if(!HOST.core || HOST.wake || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  try{ HOST.wake = await navigator.wakeLock.request('screen'); HOST.wake.addEventListener('release', () => { HOST.wake = null; }); }catch(e){}
+}
+document.addEventListener('visibilitychange', keepAwake);
+const inviteLink = () => location.origin + location.pathname + '?join=' + HOST.code;
+
 async function initServers(){
   const known = new Map();
   // A server that serves the game itself is joined automatically.
@@ -441,28 +617,48 @@ async function initServers(){
     try{ const r = await fetch('servers.json', {cache:'no-store'}); const j = r.ok && await r.json(); for(const x of (j && j.servers) || []){ const u = normServerUrl(x.url); if(u && !known.has(u)) known.set(u, {url:u, name:String(x.name || u).slice(0, 40), desc:String(x.description || '').slice(0, 120), community:true}); } }catch(e){}
   }
   NET.list = [...known.values()];
-  const saved = lsGet(SERVER_KEY, ''); if(saved) connectServer(saved, true);
+  // An invite link (?join=CODE) joins that village; a host that was hosting picks up where it left off.
+  const q = new URLSearchParams(location.search), join = normServerUrl(q.get('join') || '');
+  if(q.has('join')){ q.delete('join'); try{ history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }catch(e){} }
+  const host = lsGet(HOST_KEY, {}) || {};
+  if(host.on && !join) startHosting();
+  else if(join) connectServer(join);
+  else { const saved = lsGet(SERVER_KEY, ''); if(saved) connectServer(saved, true); }
   if(UI.screen === 'online') render();
 }
 function serverRows(){
   const mine = lsGet(SERVERS_KEY, []), all = [...NET.list], seen = new Set(all.map(x => x.url));
+  if(HOST.core) seen.add('p2p:' + HOST.code);
   for(const x of mine) if(x && x.url && !seen.has(x.url)){ all.push({url:x.url, name:x.name, saved:true}); seen.add(x.url); }
   return all;
+}
+function hostHTML(){
+  if(!HOST.core) return `<div class="srv-hostbox"><h4>📱 Host on this device</h4>
+    <p class="muted">Turn this phone, tablet or computer into a village. Friends join with a code, nothing to install. It stays open while this page does, so keep the screen on.</p>
+    <button class="btn primary" data-act="hostStart">Start hosting</button></div>`;
+  const n = HOST.peers.size, st = HOST.status;
+  return `<div class="srv-hostbox on"><h4>📱 You're hosting</h4>
+    <div class="srv-now"><span class="srv-dot ${st === 'online' ? 'online' : st === 'error' ? 'offline' : 'connecting'}"></span><div><b>Village code <span class="host-code">${HOST.code}</span></b>
+      <small>${st === 'online' ? `Open for players, ${n} connected${HOST.wake ? ', screen kept awake' : ''}` : st === 'error' ? esc(HOST.err) : 'Opening the gates…'}</small></div></div>
+    <div class="res-acts" style="margin-top:8px"><button class="btn sm primary" data-act="hostShare">${navigator.share ? 'Share invite' : 'Copy invite link'}</button><button class="btn sm bad" data-act="hostStop">Stop hosting</button></div>
+    <small class="muted" style="display:block;margin-top:6px">Friends tap the invite link, or type the code into the box above. Keep this page open and your screen on; if the page closes, the village closes too (its leaderboard is kept for next time).</small></div>`;
 }
 function serversHTML(){
   if(NET.mode === 'claude') return '';
   const sv = NET.server, rows = serverRows();
   const status = !sv ? '<p class="muted">You\'re playing offline. Join a server to meet other ninja, climb a shared leaderboard and raid together.</p>'
-    : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, ${NET.peers.filter(p => !p.isMe).length} other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
+    : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, <span class="net-n">${NET.peers.filter(p => !p.isMe).length}</span> other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
   return `<div class="panel srv"><h3>🌐 Servers</h3>${status}
-    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || x.url)}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
-    <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Server address, e.g. wss://ninja.example.com" autocomplete="off" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
-    <details class="srv-host"><summary>Host your own server</summary>
+    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : /^p2p:/.test(x.url) ? '📱' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || (/^p2p:/.test(x.url) ? 'Village code ' + x.url.slice(4) : x.url))}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
+    <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Village code or server address" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
+    ${hostHTML()}
+    <details class="srv-host"><summary>Run a dedicated server (always on)</summary>
       <p>The server is one file with no dependencies. With <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 18+</a>:</p>
       <pre>git clone https://github.com/Mofferato/tsukimori
 cd tsukimori
 node server/server.js</pre>
       <p>Friends on your network open <code>http://&lt;your-ip&gt;:8787</code> and are joined automatically. To let anyone in, run it on a host with HTTPS (Render, Fly.io, Railway or any VPS; a <code>Dockerfile</code> is included), then share its <code>wss://</code> address or add it to <code>servers.json</code> with a pull request.</p>
+      <p>On an Android phone you can run it in <a href="https://termux.dev" target="_blank" rel="noopener">Termux</a>: <code>pkg install nodejs git</code>, then the commands above.</p>
       <p class="muted">Set <code>SERVER_NAME</code> and <code>MOTD</code> to name your village and greet players.</p></details></div>`;
 }
 function netChanged(){
@@ -476,6 +672,7 @@ function netChanged(){
   if(el('net-hire')) el('net-hire').innerHTML = hireHTML();
   if(el('net-fame')) el('net-fame').innerHTML = fameHTML();
   if(el('net-count')) el('net-count').textContent = NET.peers.filter(p => !p.isMe).length;
+  document.querySelectorAll('.net-n').forEach(x => { x.textContent = NET.peers.filter(p => !p.isMe).length; });
 }
 function presence(){
   if(!NET.room || !S || !S.char) return;
