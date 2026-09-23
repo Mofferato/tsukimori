@@ -351,11 +351,17 @@ function attachNet(db, room){
 const SERVER_KEY = 'tsukimori_server', SERVERS_KEY = 'tsukimori_servers', TOKENS_KEY = 'tsukimori_server_tokens';
 const lsGet = (k, d) => { try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } };
 const lsSet = (k, v) => { try{ if(v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
-// Your identity on a server is a random secret kept in this browser (one per server).
+// Your identity on a server is a random secret kept in this browser, one per server and save slot,
+// so each of your ninja has its own leaderboard entry and cloud save.
 function serverToken(url){
-  const t = lsGet(TOKENS_KEY, {}); if(t[url]) return t[url];
-  const a = new Uint8Array(24); crypto.getRandomValues(a); t[url] = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); lsSet(TOKENS_KEY, t); return t[url];
+  const slot = activeSlot(), k = slot === 'main' ? url : url + '#' + slot;
+  const t = lsGet(TOKENS_KEY, {}); if(t[k]) return t[k];
+  const a = new Uint8Array(24); crypto.getRandomValues(a); t[k] = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); lsSet(TOKENS_KEY, t); return t[k];
 }
+// The server identity only belongs to the ninja it was issued for; between a switch and the rejoin, publish nothing.
+const mineUid = () => NET.mode === 'server' && NET.uidSlot !== activeSlot() ? null : NET.uid;
+// After switching ninja, rejoin the server as that ninja.
+function netSlotChanged(){ if(NET.mode === 'server' && NET.server) connectServer(NET.server.url, true); else { NET.lastPresence = ''; presence(); publishEcho(); } }
 // "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL; "ABC123" or "p2p:ABC123" → a device-hosted village
 const P2P_CODE = /^[A-Z2-9]{4,8}$/;
 function normServerUrl(u){
@@ -506,7 +512,7 @@ function connectServer(url, quiet){
     if(!NET.server || NET.backend !== be) return;
     NET.server.status = st;
     if(st === 'online'){
-      const first = !NET.server.info; NET.server.info = {name:String(m.name || 'Server').slice(0, 40), motd:String(m.motd || '').slice(0, 200)}; NET.uid = m.uid;
+      const first = !NET.server.info; NET.server.info = {name:String(m.name || 'Server').slice(0, 40), motd:String(m.motd || '').slice(0, 200)}; NET.uid = m.uid; NET.uidSlot = activeSlot();
       rememberServer(url, NET.server.info.name); NET.lastPresence = ''; presence(); publishEcho(); if(S && S.squad) publishHires();
       if(first && !quiet) toast(`Joined ${NET.server.info.name}`);
     }
@@ -649,7 +655,7 @@ function serversHTML(){
   const status = !sv ? '<p class="muted">You\'re playing offline. Join a server to meet other ninja, climb a shared leaderboard and raid together.</p>'
     : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, <span class="net-n">${NET.peers.filter(p => !p.isMe).length}</span> other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
   return `<div class="panel srv"><h3>🌐 Servers</h3>${status}
-    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : /^p2p:/.test(x.url) ? '📱' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || (/^p2p:/.test(x.url) ? 'Village code ' + x.url.slice(4) : x.url))}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
+    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : /^p2p:/.test(x.url) ? '📱' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || (/^p2p:/.test(x.url) ? 'Village code ' + x.url.slice(4) : x.url))}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
     <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Village code or server address" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
     ${hostHTML()}
     <details class="srv-host"><summary>Run a dedicated server (always on)</summary>
@@ -682,19 +688,19 @@ function presence(){
 }
 function buildOf(c){ return {name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:c.bond[c.pet] || 0} : {}, clan:c.clan}; }
 function publishEcho(){
-  if(!NET.db || !NET.uid || !S || !S.char) return;
+  if(!NET.db || !mineUid() || !S || !S.char) return;
   const c = S.char;
   const sq = activeSquad(), build = Object.assign(buildOf(c), {squad:sq.map(r => ({name:r.name, element:r.element, level:r.level, look:r.look, alloc:r.alloc, equip:r.equip, skills:r.skills, loadout:r.loadout}))});
   NET.db.doc('echoes/' + NET.uid).set({name:c.name, level:c.level, element:c.element, rating:S.arena.rating, power:buildPower(c, sq), squad:sq.length, build:JSON.stringify(build), updatedAt:Date.now()}).catch(() => {});
 }
 function publishRaid(){
-  if(!NET.db || !NET.uid) return;
+  if(!NET.db || !mineUid()) return;
   const ev = S.event;
   NET.db.doc('raidhits/' + NET.uid).set({week:ev.week, bossId:ev.bossId, dmg:ev.dmg, pct:+(ev.dmg / ev.pool * 100).toFixed(2), name:S.char.name, updatedAt:Date.now()}).catch(() => {});
 }
-async function cloudSave(){ if(!NET.db || !NET.uid) return toast('Cloud save needs a server connection'); try{ await NET.db.doc(`data/users/${NET.uid}/save`).set({json:JSON.stringify(S), savedAt:Date.now()}); toast('Saved to the cloud'); }catch(e){ toast('Cloud save failed: ' + e.message); } }
+async function cloudSave(){ if(!NET.db || !mineUid()) return toast('Cloud save needs a server connection'); try{ await NET.db.doc(`data/users/${NET.uid}/save`).set({json:JSON.stringify(S), savedAt:Date.now()}); toast('Saved to the cloud'); }catch(e){ toast('Cloud save failed: ' + e.message); } }
 async function cloudLoad(){
-  if(!NET.db || !NET.uid) return toast('Cloud save needs a server connection');
+  if(!NET.db || !mineUid()) return toast('Cloud save needs a server connection');
   try{ const d = await NET.db.doc(`data/users/${NET.uid}/save`).get(); if(!d.exists) return toast('No cloud save yet'); S = migrate(JSON.parse(d.data().json)); persist(); go('hub'); toast('Cloud save loaded'); }
   catch(e){ toast('Could not load: ' + e.message); }
 }

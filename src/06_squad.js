@@ -113,7 +113,7 @@ function hiredBy(){ // how many other players have recruited your echo
   return (NET.hires || []).filter(h => h.id !== NET.uid && Array.isArray(h.ids) && h.ids.includes(NET.uid)).length;
 }
 function publishHires(){
-  if(!NET.db || !NET.uid) return;
+  if(!NET.db || !mineUid()) return;
   NET.db.doc('hires/' + NET.uid).set({ids:S.squad.hired.slice(-50), name:S.char.name, updatedAt:Date.now()}).catch(() => {});
 }
 

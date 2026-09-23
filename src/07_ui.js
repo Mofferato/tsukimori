@@ -38,16 +38,24 @@ function hudHTML(){
 
 /* ============================ SCREENS ============================ */
 function titleScreen(){
-  const saved = loadLocal(), has = saved && saved.char;
+  const saved = loadLocal(), has = saved && saved.char, others = slotIndex().list.filter(e => e.id !== activeSlot());
   return `<section class="title">
     <div class="title-art"><div class="moonbg"></div><div class="title-ninja">${ninjaSVG({gender:'m',hairStyle:'spiky',hair:'#2b2b3a',outfit:'#27347f',eyes:'#3b6fd6',skin:'#f3d2b3'}, {weapon:{w:'sword'}, back:{b:'scroll'}}, {scarf:'#e8553a'})}</div></div>
     <h1>Tsukimori<small>A moon-forest ninja RPG</small></h1>
     <p class="lede">Train at the academy, master the five elements and climb from Lantern Pupil to Eclipse Warden.</p>
     <div class="title-btns">
       ${has ? `<button class="btn primary big" data-act="continue">Continue as ${esc(saved.char.name)} (Lv ${saved.char.level | 0})</button>` : ''}
-      <button class="btn ${has ? '' : 'primary'} big" data-act="go" data-arg="create">Create a new ninja</button>
+      ${others.length ? `<div class="slot-list">${others.map(slotRowHTML).join('')}</div>` : ''}
+      <button class="btn ${has || others.length ? '' : 'primary'} big" data-act="newSlot">Create a new ninja</button>
       <button class="btn ghost" data-act="go" data-arg="system">Import a save</button>
-    </div></section>`;
+    </div>${has || others.length ? '<p class="muted center" style="margin-top:6px">A new ninja gets its own save. Your other ninja are kept.</p>' : ''}</section>`;
+}
+// One row in a list of saves: face, name and level, plus Play (and Delete where offered).
+function slotRowHTML(e, withDelete){
+  const E = ELEMENTS[e.element] || ELEMENTS.fire, cur = S && S.char && e.id === activeSlot();
+  return `<div class="panel slot-row ${cur ? 'cur' : ''}"><span class="op-face">${ninjaSVG(e.look || {}, {}, {viewBox:'18 20 84 84', scarf:E.color})}</span>
+    <div><b>${esc(String(e.name || 'Nameless').slice(0, 16))}</b><small>${E.icon} Level ${e.level | 0}${cur ? ', playing now' : ''}</small></div>
+    <div class="op-acts">${cur ? '' : `<button class="btn sm primary" data-act="playSlot" data-arg="${esc(e.id)}">Play</button>`}${withDelete ? `<button class="btn sm" data-act="askDelSlot" data-arg="${esc(e.id)}" aria-label="Delete ${esc(e.name)}">Delete</button>` : ''}</div></div>`;
 }
 function createScreen(){
   const c = UI.create, E = ELEMENTS[c.element];
@@ -226,16 +234,20 @@ function resultsScreen(){
 }
 function systemScreen(){
   const has = S && S.char;
+  const slots = slotIndex().list;
   return `<section><h2 class="scr-title">💾 Save and load</h2><div class="stack">
+    <div class="panel"><h3>Your ninja (${slots.length}/${MAX_SLOTS})</h3><p class="muted">Each ninja has its own save in this browser. Switching keeps everyone's progress.</p>
+      <div class="slot-list">${slots.map(e => slotRowHTML(e, true)).join('') || '<p class="muted">No saves yet.</p>'}</div>
+      <button class="btn primary" data-act="newSlot" ${slots.length >= MAX_SLOTS ? 'disabled' : ''}>Create a new ninja</button></div>
     ${has ? `<div class="panel"><h3>Export</h3><p class="muted">Progress autosaves in this browser after every mission and purchase. Copy this JSON to keep a backup or move to another device.</p>
       <textarea id="exp" readonly rows="5">${esc(JSON.stringify(S))}</textarea><button class="btn primary" data-act="copyExport">Copy save</button></div>` : ''}
-    <div class="panel"><h3>Import</h3><p class="muted">Paste a save exported from Tsukimori. This replaces the current game.</p>
+    <div class="panel"><h3>Import</h3><p class="muted">Paste a save exported from Tsukimori. It's added as a new save; your other ninja are kept.</p>
       <textarea id="imp" rows="5" placeholder='{"version":1, ...}'></textarea><button class="btn primary" data-act="importSave">Load save</button></div>
     ${has ? `<div class="panel"><h3>Cloud save</h3><p class="muted">${NET.db && NET.uid ? (NET.mode === 'server' ? `Keep a private copy of your save on ${esc(NET.server.info ? NET.server.info.name : 'this server')}. It is tied to this browser.` : 'Keep a private copy of your save on your Claude account.') : 'Available when you join a multiplayer server (Village Square) or play the Claude-hosted version.'}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="cloudSave" ${NET.db && NET.uid ? '' : 'disabled'}>Save to cloud</button><button class="btn" data-act="cloudLoad" ${NET.db && NET.uid ? '' : 'disabled'}>Load from cloud</button></div></div>
       <div class="panel"><h3>Sound</h3><div class="seg"><button class="${S.settings.sound ? 'on' : ''}" data-act="soundSet" data-arg="1">On</button><button class="${S.settings.sound ? '' : 'on'}" data-act="soundSet" data-arg="0">Off</button></div></div>
       <div class="panel"><h3>Battle speed</h3><div class="seg">${[1,2,3].map(v => `<button class="${S.settings.speed === v ? 'on' : ''}" data-act="speed" data-arg="${v}">${v}×</button>`).join('')}</div></div>
-      <div class="panel"><h3>Start over</h3><p class="muted">Deletes this browser's save. Export first if you want to keep it.</p><button class="btn bad" data-act="askNew">Start a new game</button></div>`
+      <div class="panel"><h3>Delete this ninja</h3><p class="muted">Deletes ${esc(S.char.name)}'s save for good. Export it first if you want to keep a copy. Your other ninja are not affected.</p><button class="btn bad" data-act="askDelSlot" data-arg="${esc(activeSlot())}">Delete ${esc(S.char.name)}</button></div>`
       : `<button class="btn ghost" data-act="go" data-arg="title">Back to title</button>`}
   </div></section>`;
 }
@@ -440,6 +452,13 @@ function actionsHTML(){
 const ACT = {
   go: a => { if(!['title','create','system'].includes(a) && !(S && S.char)) return go('title'); go(a); },
   continue: () => { try{ S = migrate(loadLocal()); go('hub'); checkLogin(); checkAchievements(); publishEcho(); }catch(e){ toast(e.message); } },
+  newSlot: () => { if(B || RUN) return toast('Finish the battle first'); try{ openNewSlot(); }catch(e){ return toast(e.message); } S = null; UI.results = null; GUIDE.undo = null; GUIDE.open = false; GUIDE.msgs = []; UI.create = defaultCreate(); go('create'); },
+  playSlot: id => { if(B || RUN) return toast('Finish the battle first'); try{ S = useSlot(id); }catch(e){ return toast(e.message); }
+    UI.results = null; GUIDE.undo = null; GUIDE.open = false; GUIDE.msgs = []; go('hub'); checkLogin(); checkAchievements(); netSlotChanged(); toast(`Playing as ${S.char.name}`); },
+  askDelSlot: id => { const e = slotIndex().list.find(x => x.id === id); if(!e) return;
+    showModal(`Delete ${esc(e.name)}?`, `<p>${esc(e.name)} (level ${e.level | 0}) is deleted from this browser for good. Your other ninja are kept.</p>`, [{label:'Keep', act:'closeModal'}, {label:'Delete', act:'doDelSlot', arg:id, cls:'bad'}]); },
+  doDelSlot: id => { closeModal(); const cur = S && S.char && id === activeSlot(); deleteSlot(id);
+    if(cur){ S = null; B = null; RUN = null; UI.results = null; GUIDE.undo = null; GUIDE.open = false; GUIDE.msgs = []; go('title'); } else render(); toast('Save deleted'); },
   cset: a => {
     const i = a.indexOf(':'), k = a.slice(0, i), v = a.slice(i + 1);
     UI.create[k] = v;
@@ -449,8 +468,8 @@ const ACT = {
   createDone: () => {
     const n = (UI.create.name || '').trim();
     if(!n){ toast('Give your ninja a name first'); const i = $('#cname'); if(i) i.focus(); return; }
-    S = defaultState(); S.char = newCharacter(UI.create); persist();
-    S.login = {day:todayKey(), streak:1}; go('hub'); publishEcho();
+    S = defaultState(); S.char = newCharacter(UI.create); S.login = {day:todayKey(), streak:1}; persist();
+    go('hub'); netSlotChanged(); publishEcho();
     setTimeout(() => { GUIDE.open = true; GUIDE.msgs = []; guideIntro(); guideSay('momo', 'Tip: tap the Mission Board and take "Bandits on the Reed Road" first. I can also do things for you, just ask!'); renderGuide(); }, 500);
   },
   tab: a => { const [k, v] = a.split(':'); UI.tab[k] = v; render(); },
@@ -493,8 +512,6 @@ const ACT = {
   autoAlloc: () => { const c = S.char; if(!c.points) return; allocRecruit(c, autoAllocRecruit(c)); persist(); render(); toast('Points assigned'); },
   autoAllocAll: () => { let n = 0; for(const x of [S.char, ...S.squad.roster]) if(x.points){ allocRecruit(x, autoAllocRecruit(x)); n++; } persist(); render(); toast(n > 1 ? `Points assigned for ${n} ninja` : 'Points assigned'); },
   respec: () => { const c = S.char; c.points += c.alloc.hp + c.alloc.cp + c.alloc.agi; c.alloc = {hp:0, cp:0, agi:0}; persist(); render(); toast('Points refunded'); },
-  askNew: () => showModal('Start a new game?', '<p>This deletes the save in this browser. Export it first if you want to keep it.</p>', [{label:'Keep playing', act:'closeModal'}, {label:'Delete and start over', act:'doNewGame', cls:'bad'}]),
-  doNewGame: () => { try{ localStorage.removeItem(SAVE_KEY); }catch(e){} S = null; UI.create = defaultCreate(); go('create'); },
   copyExport: () => {
     const ta = $('#exp'); if(!ta) return;
     const done = () => toast('Save copied');
@@ -503,7 +520,7 @@ const ACT = {
   },
   importSave: () => {
     const t = ($('#imp') || {}).value || '';
-    try{ S = migrate(JSON.parse(t)); persist(); go('hub'); toast(`Loaded ${S.char.name}`); }
+    try{ const next = migrate(JSON.parse(t)); openNewSlot(); S = next; persist(); UI.results = null; GUIDE.undo = null; GUIDE.open = false; GUIDE.msgs = []; go('hub'); netSlotChanged(); toast(`Added ${S.char.name} as a new save`); }
     catch(e){ toast(e instanceof SyntaxError ? 'That text is not valid JSON.' : e.message); }
   },
   speed: a => { S.settings.speed = +a; persist(); render(); },

@@ -24,8 +24,51 @@ function newCharacter(cr){
     equip:{weapon:'kunai_train', clothing:null, back:null, accessory:null},
     skills:[first], loadout:[first], pets:[], pet:null, bond:{}, clan:null};
 }
-function persist(){ try{ if(S && S.char) localStorage.setItem(SAVE_KEY, JSON.stringify(S)); }catch(e){} }
-function loadLocal(){ try{ const t = localStorage.getItem(SAVE_KEY); return t ? JSON.parse(t) : null; }catch(e){ return null; } }
+/* ---- Save slots ----
+   Each ninja lives in its own slot. The index lists them for the title and Save screens; the first
+   slot keeps the original key, so saves from before slots existed simply become slot "main". */
+const SLOTS_KEY = 'tsukimori_slots', MAX_SLOTS = 8;
+const slotKey = id => id === 'main' ? SAVE_KEY : SAVE_KEY + ':' + id;
+const slotMeta = (id, s) => ({id, name:s.char.name, level:s.char.level | 0, element:s.char.element, look:s.char.look, updated:Date.now()});
+function slotIndex(){
+  let x = null; try{ x = JSON.parse(localStorage.getItem(SLOTS_KEY)); }catch(e){}
+  if(x && typeof x.active === 'string' && Array.isArray(x.list)) return x;
+  x = {active:'main', list:[]};
+  try{ const t = localStorage.getItem(SAVE_KEY), o = t && JSON.parse(t); if(o && o.char) x.list.push(slotMeta('main', o)); }catch(e){}
+  return x;
+}
+function saveIndex(x){ try{ localStorage.setItem(SLOTS_KEY, JSON.stringify(x)); }catch(e){} }
+const activeSlot = () => slotIndex().active;
+function readSlot(id){ try{ const t = localStorage.getItem(slotKey(id)); return t ? JSON.parse(t) : null; }catch(e){ return null; } }
+function persist(){
+  if(!(S && S.char)) return;
+  try{
+    const x = slotIndex(); localStorage.setItem(slotKey(x.active), JSON.stringify(S));
+    const m = slotMeta(x.active, S), i = x.list.findIndex(e => e.id === x.active);
+    if(i >= 0) x.list[i] = m; else x.list.push(m);
+    saveIndex(x);
+  }catch(e){}
+}
+function loadLocal(){ return readSlot(activeSlot()); }
+// Points the game at a fresh, empty slot (it appears in the list once the new ninja is saved).
+function openNewSlot(){
+  const x = slotIndex(); if(x.list.length >= MAX_SLOTS) throw new Error(`You can keep up to ${MAX_SLOTS} saves. Delete one first.`);
+  if(S && S.char) persist();
+  x.active = 's' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36); saveIndex(x);
+  return x.active;
+}
+function useSlot(id){
+  const o = readSlot(id); if(!o) throw new Error('That save is empty');
+  if(S && S.char) persist();
+  const next = migrate(o), x = slotIndex(); x.active = id; saveIndex(x);
+  return next;
+}
+function deleteSlot(id){
+  const x = slotIndex(); try{ localStorage.removeItem(slotKey(id)); }catch(e){}
+  x.list = x.list.filter(e => e.id !== id);
+  if(x.active === id) x.active = x.list.length ? x.list[0].id : 'main';
+  saveIndex(x);
+}
 // Normalizes a character (the player's, or an imported ghost) so every field exists.
 function normChar(o){
   const c = Object.assign({level:1, xp:0, gold:0, points:0, skills:[], loadout:[], pets:[], pet:null, bond:{}, clan:null}, o);

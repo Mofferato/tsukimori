@@ -24,7 +24,7 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 - **Journal**: daily quests, a login streak and 15 achievements.
 - **Momo the guide**: answers questions and acts for you (spend points, buy and equip gear, learn techniques, adopt pets, join clans, claim rewards, start battles), with undo.
 - **Multiplayer servers**: join a server from the Village Square, host a village right from your phone with a code, or run a dedicated server with one command (see below).
-- **Save/load**: autosave, JSON export/import, and cloud save when online.
+- **Save/load**: up to 8 ninja per browser, each in its own save slot (create a new ninja or switch from the title or Save screen without losing anyone), autosave, JSON export/import (imports become a new slot), and cloud save when online.
 - **Sound effects** from a tiny WebAudio synth, light and dark themes, mobile-first layout, keyboard support and reduced motion.
 
 ## AI guide and multiplayer: where they run
