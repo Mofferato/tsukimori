@@ -67,6 +67,7 @@ function migrate(o){
   s.squad.roster = (s.squad.roster || []).filter(r => r && r.id).map(r => Object.assign(normChar(r), {squad:[]}));
   s.squad.active = (s.squad.active || []).filter(id => s.squad.roster.some(r => r.id === id)).slice(0, MAX_SQUAD);
   s.squad.pool = (s.squad.pool || []).map(r => Object.assign(normChar(r), {squad:[]}));
+  s.squad.roster.forEach(r => { r.autoTech = r.autoTech !== false; learnNewTechs(r); }); // older saves: catch recruits up on techniques they've outgrown
   s.version = 4;
   return s;
 }
@@ -472,9 +473,11 @@ function finishRun(outcome, fled = false){
   c.gold += res.gold;
   res.items.forEach(it => addInv(it.id, 1));
   res.ups = gainXp(res.xp);
+  res.squadUps = [];
   if(win || RUN.kind === 'event') for(const su of squadUnits){
     const r = S.squad.roster.find(x => x.id === su.key); if(!r) continue;
-    const ups = gainXpFor(r, res.xp); res.lines.push(`👥 ${esc(r.name)} +${res.xp} XP${ups.length ? `, now level ${r.level}! (+${ups.length * POINTS_PER_LEVEL} points)` : ''}`);
+    const {ups, learned} = progressRecruit(r, res.xp); res.lines.push(`👥 ${esc(r.name)} +${res.xp} XP`);
+    if(ups.length) res.squadUps.push({id:r.id, name:r.name, level:r.level, gained:ups.length * POINTS_PER_LEVEL, learned:learned.map(s => s.id)});
   }
   const nr = rankOf(c.level); res.newRank = nr !== oldRank ? nr : null;
   res.newSkills = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl > oldLv && s.lvl <= c.level);

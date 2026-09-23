@@ -87,6 +87,7 @@ function hubScreen(){
   return `<section>
     <div class="village-wrap">${villageSVG()}<div id="net-village" class="net-village" aria-hidden="true"></div></div>
     ${c.points ? `<div class="panel notice" data-act="go" data-arg="character" role="button" tabindex="0">⬆️ You have ${c.points} unspent stat points. Tap to allocate them.</div>` : ''}
+    ${(S.squad.roster || []).filter(m => m.points).map(m => `<div class="panel notice" data-act="manageR" data-arg="${m.id}" role="button" tabindex="0">👥 ${esc(m.name)} has ${m.points} unspent stat points. Tap to allocate them.</div>`).join('')}
     <div class="hub-grid">
       ${b('missions','📜','Mission Board','Ranked missions for XP and gold')}
       ${b('academy','🏯','Academy','Learn and equip techniques')}
@@ -212,6 +213,7 @@ function resultsScreen(){
         ${r.lines.map(l => `<div class="res-row" style="font-size:14px">${l}</div>`).join('')}
         <div class="xpline"><span>Lv ${c.level}</span><span class="bar xp"><i style="width:${xpPct(c)}%"></i></span><span>${c.level >= MAX_LEVEL ? 'MAX' : `${c.xp}/${xpToNext(c.level)}`}</span></div></div></div>
     ${r.ups.length ? `<div class="panel hl-panel">⬆️ Reached level ${c.level}! You have ${c.points} stat points to spend.</div>` : ''}
+    ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<button class="btn sm primary" data-act="manageR" data-arg="${m.id}">Spend ${esc(m.name)}'s points</button>` : ''}</div>`; }).join('')}
     ${(r.ach || []).map(a => `<div class="panel hl-panel">🏅 Achievement: ${a.icon} ${a.name}! ${a.reward.gold ? `+${a.reward.gold} gold ` : ''}${a.reward.shards ? `+${a.reward.shards} shards` : ''}</div>`).join('')}
     ${r.newRank ? `<div class="panel hl-panel">🎖️ New rank: ${r.newRank.name}. ${r.newRank.desc}</div>` : ''}
     ${mine.length ? `<div class="panel hl-panel">📖 New at the Academy: ${mine.map(s => s.icon + ' ' + s.name).join(', ')}</div>` : ''}
@@ -220,6 +222,7 @@ function resultsScreen(){
       <button class="btn primary" data-act="go" data-arg="hub">Return to the village</button>
       ${r.retry ? `<button class="btn" data-act="${r.retry.act}" data-arg="${r.retry.arg}">${r.retry.label}</button>` : ''}
       ${c.points ? `<button class="btn" data-act="go" data-arg="character">Spend points</button>` : ''}
+      ${!c.points && (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="manageR" data-arg="${r.squadUps.find(u => (recruitById(u.id) || {}).points).id}">Spend squad points</button>` : ''}
     </div></section>`;
 }
 function systemScreen(){
@@ -229,7 +232,7 @@ function systemScreen(){
       <textarea id="exp" readonly rows="5">${esc(JSON.stringify(S))}</textarea><button class="btn primary" data-act="copyExport">Copy save</button></div>` : ''}
     <div class="panel"><h3>Import</h3><p class="muted">Paste a save exported from Tsukimori. This replaces the current game.</p>
       <textarea id="imp" rows="5" placeholder='{"version":1, ...}'></textarea><button class="btn primary" data-act="importSave">Load save</button></div>
-    ${has ? `<div class="panel"><h3>Cloud save</h3><p class="muted">${NET.db && NET.uid ? 'Keep a private copy of your save on your Claude account.' : 'Available when you play the Claude-hosted version.'}</p>
+    ${has ? `<div class="panel"><h3>Cloud save</h3><p class="muted">${NET.db && NET.uid ? (NET.mode === 'server' ? `Keep a private copy of your save on ${esc(NET.server.info ? NET.server.info.name : 'this server')}. It is tied to this browser.` : 'Keep a private copy of your save on your Claude account.') : 'Available when you join a multiplayer server (Village Square) or play the Claude-hosted version.'}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="cloudSave" ${NET.db && NET.uid ? '' : 'disabled'}>Save to cloud</button><button class="btn" data-act="cloudLoad" ${NET.db && NET.uid ? '' : 'disabled'}>Load from cloud</button></div></div>
       <div class="panel"><h3>Sound</h3><div class="seg"><button class="${S.settings.sound ? 'on' : ''}" data-act="soundSet" data-arg="1">On</button><button class="${S.settings.sound ? '' : 'on'}" data-act="soundSet" data-arg="0">Off</button></div></div>
       <div class="panel"><h3>Battle speed</h3><div class="seg">${[1,2,3].map(v => `<button class="${S.settings.speed === v ? 'on' : ''}" data-act="speed" data-arg="${v}">${v}×</button>`).join('')}</div></div>
@@ -535,6 +538,10 @@ const ACT = {
   fightEcho: a => { const e = NET.echoes.find(x => x.id === a); const g = e && echoGhost(e); if(!g) return toast('That echo could not be loaded'); RUN = {kind:'arena', ghost:g, custom:true, xp:0, gold:0, stages:1}; startStage(); },
   emote: a => { if(!NET.room) return; NET.room.emit('emote', {emoji:a, name:S.char.name}).then(() => { S.counters.social++; checkAchievements(); }).catch(() => toast('Could not send')); },
   shout: () => { const i = $('#shout-in'); const t = (i && i.value || '').trim().slice(0, 140); if(!t || !NET.room) return; i.value = ''; NET.room.emit('shout', {text:t, name:S.char.name}).then(() => { S.counters.social++; checkAchievements(); }).catch(() => toast('Could not send')); },
+  srvJoin: a => connectServer(a),
+  srvAdd: () => { const i = $('#srv-in'); if(i && i.value.trim()) connectServer(i.value); },
+  srvLeave: () => { disconnectServer(); render(); toast('Left the server'); },
+  srvForget: a => { lsSet(SERVERS_KEY, lsGet(SERVERS_KEY, []).filter(x => x.url !== a)); render(); },
   commClaim: a => { const i = +a, g = COMMUNITY_GOALS[i], ev = S.event; ev.commClaimed = ev.commClaimed || []; if(ev.commClaimed.includes(i) || raidTotals().total < g.pct) return; ev.commClaimed.push(i); S.shards += g.shards; persist(); render(); toast(`+${g.shards} Moon Shards`); },
   petBuy: a => {
     const p = PET[a], c = S.char; if(!p || c.pets.includes(a)) return;
@@ -601,6 +608,7 @@ document.addEventListener('keydown', e => {
   if(e.key !== 'Enter') return;
   if(e.target.id === 'g-input'){ e.preventDefault(); ACT.guideSend(); }
   if(e.target.id === 'shout-in'){ e.preventDefault(); ACT.shout(); }
+  if(e.target.id === 'srv-in'){ e.preventDefault(); ACT.srvAdd(); }
 });
 document.addEventListener('input', e => {
   if(e.target.id === 'cname'){ UI.create.name = e.target.value; const p = $('.preview-name'); if(p) p.textContent = e.target.value || 'Your name'; }

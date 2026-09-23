@@ -32,6 +32,25 @@ function gainXpFor(r, amt){
   if(r.level >= cap) r.xp = Math.min(r.xp, xpToNext(r.level) - 1);
   return ups;
 }
+// Recruits grow into their element: the lodge master teaches them each new technique of their element for free
+// as they reach its level. With auto-upgrade on (the default) the new technique takes the loadout slot of their weakest one.
+const recruitTechs = r => SKILLS.filter(s => s.el === r.element && !s.enemyOnly && !s.petOnly && s.lvl <= r.level);
+function learnNewTechs(r){
+  const learned = recruitTechs(r).filter(s => !r.skills.includes(s.id));
+  for(const s of learned){
+    r.skills.push(s.id);
+    if(r.autoTech === false) continue;
+    if(r.loadout.length < MAX_LOADOUT){ r.loadout.push(s.id); continue; }
+    const weakest = r.loadout.reduce((w, id) => SKILL[id].lvl < SKILL[w].lvl ? id : w);
+    if(SKILL[weakest].lvl < s.lvl) r.loadout[r.loadout.indexOf(weakest)] = s.id;
+  }
+  return learned;
+}
+// Levels a recruit up and teaches any techniques they've grown into. Returns {ups, learned}.
+function progressRecruit(r, amt){
+  const ups = gainXpFor(r, amt);
+  return {ups, learned:ups.length ? learnNewTechs(r) : []};
+}
 // An echo of a real player joins at no higher than your level, with points and techniques scaled to fit.
 function recruitFromEcho(e){
   let g; try{ g = normChar(JSON.parse(e.build)); }catch(err){ return null; }
@@ -45,6 +64,7 @@ function recruitFromEcho(e){
 }
 function addToRoster(r){
   const q = S.squad; if(q.roster.length >= MAX_ROSTER) throw new Error(`Your roster is full (${MAX_ROSTER}). Dismiss someone first.`);
+  r.autoTech = true; learnNewTechs(r);
   q.roster.push(r); if(q.active.length < MAX_SQUAD) q.active.push(r.id);
 }
 function hireFromPool(i){
@@ -59,8 +79,8 @@ function trainRecruit(r){
   if(trainsLeft(r) <= 0) throw new Error(`${r.name} is worn out. Train again tomorrow.`);
   const cost = trainCost(r); if(S.char.gold < cost) throw new Error('Not enough gold');
   S.char.gold -= cost; S.squad.train.n[r.id] = (S.squad.train.n[r.id] || 0) + 1;
-  const xp = Math.round(xpToNext(r.level) * 0.35), ups = gainXpFor(r, xp);
-  return `${r.name} trained hard: +${xp} XP${ups.length ? `, reached level ${r.level}!` : ''}`;
+  const xp = Math.round(xpToNext(r.level) * 0.35), {ups, learned} = progressRecruit(r, xp);
+  return `${r.name} trained hard: +${xp} XP${ups.length ? `, reached level ${r.level}!` : ''}${learned.length ? ` Learned ${learned.map(s => s.name).join(', ')}.` : ''}`;
 }
 function unequipRecruit(r, sl){
   const id = r.equip[sl]; if(!id) return;
@@ -98,7 +118,7 @@ function publishHires(){
 
 /* ---------------- Screens ---------------- */
 function hireHTML(){
-  if(!NET.db) return '<p class="muted">On the Claude-hosted version you can hire echoes of real players here.</p>';
+  if(!NET.db) return '<p class="muted">Join a multiplayer server in the Village Square to hire echoes of real players here.</p>';
   const c = S.char, mine = new Set(S.squad.roster.map(r => r.fromId).filter(Boolean));
   const echoes = NET.echoes.filter(e => e.id !== NET.uid && !mine.has(e.id)).slice(0, 8);
   if(!echoes.length) return '<p class="muted">No other players have posted an echo yet.</p>';
@@ -172,6 +192,8 @@ function recruitScreen(){
       ${it ? `<button class="btn sm" data-act="unequipR" data-arg="${r.id}:${sl}" title="${r.bound[sl] ? 'Bound gear is discarded when removed' : ''}">${r.bound[sl] ? 'Discard' : 'Remove'}</button>` : ''}</div>`; }).join('')}</div>
     ${gear.length ? `<p class="note" style="margin-top:10px">Equip from your pack (starting gear is bound to the recruit and is discarded when replaced):</p><div class="stack">${gear.map(it => `<div class="panel item"><div class="item-ic">${it.icon}</div><div class="item-b"><b>${it.name} ×${S.inventory[it.id]}</b><small class="bonus">${fmtBonus(it.bonus)}</small>${r.level < it.lvl ? `<small>Needs level ${it.lvl}</small>` : ''}</div><div class="item-act"><button class="btn sm primary" data-act="equipR" data-arg="${r.id}:${it.id}" ${r.level < it.lvl ? 'disabled' : ''}>Equip</button></div></div>`).join('')}</div>` : ''}
     <h3 class="sub">Techniques (${r.loadout.length}/${MAX_LOADOUT} equipped)</h3>
+    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><small class="muted">${esc(r.name)} learns each new ${E.name} technique for free on reaching its level.</small>
+      <div class="seg" role="group" aria-label="Auto-upgrade techniques"><button class="${r.autoTech !== false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:1" aria-pressed="${r.autoTech !== false}">Auto-equip new</button><button class="${r.autoTech === false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:0" aria-pressed="${r.autoTech === false}">I'll choose</button></div></div>
     <div class="stack">${skills.map(s => { const own = r.skills.includes(s.id), inLo = r.loadout.includes(s.id), lock = r.level < s.lvl, pr = recruitSkillPrice(r, s);
       return `<article class="panel skill ${lock && !own ? 'locked' : ''}" style="--c:${ELEMENTS[s.el].color}"><div class="sk-ic">${s.icon}</div>
         <div class="sk-body"><h4>${s.name}<small>Lv ${s.lvl}</small></h4><div class="tags"><span class="tag cp">${s.cp} CP</span>${skillTags(s).map(t => `<span class="tag">${t}</span>`).join('')}</div></div>
@@ -192,6 +214,7 @@ const SQUAD_ACT = {
   equipR: a => tryDo(() => { const [id, item] = splitArg(a); return equipRecruit(recruitById(id), item); }),
   unequipR: a => tryDo(() => { const [id, sl] = splitArg(a); unequipRecruit(recruitById(id), sl); }),
   learnR: a => tryDo(() => { const [id, sk] = splitArg(a); return learnRecruit(recruitById(id), sk); }),
+  autoTechR: a => tryDo(() => { const [id, v] = splitArg(a), r = recruitById(id); r.autoTech = v === '1'; if(r.autoTech) learnNewTechs(r); return r.autoTech ? `${r.name} will equip new techniques automatically` : `You'll pick ${r.name}'s techniques`; }),
   loadR: a => tryDo(() => { const [id, sk] = splitArg(a), r = recruitById(id), i = r.loadout.indexOf(sk); if(i >= 0) r.loadout.splice(i, 1); else { if(r.loadout.length >= MAX_LOADOUT) throw new Error('Loadout full'); r.loadout.push(sk); } }),
   dismissR: id => { const r = recruitById(id); showModal(`Dismiss ${esc(r.name)}?`, '<p>They leave the lodge for good. Gear you gave them returns to your pack; bound gear leaves with them.</p>', [{label:'Keep them', act:'closeModal'}, {label:'Dismiss', act:'doDismissR', arg:id, cls:'bad'}]); },
   doDismissR: id => { closeModal(); const q = S.squad, r = recruitById(id); if(!r) return; for(const sl of SLOTS) unequipRecruit(r, sl); q.roster = q.roster.filter(x => x.id !== id); q.active = q.active.filter(x => x !== id); persist(); go('squad'); toast(`${r.name} has left`); },

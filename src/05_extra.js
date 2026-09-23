@@ -316,17 +316,24 @@ function guideDo(i){
 }
 
 /* ---------------- Online multiplayer ----------------
-   Runs where the page is hosted on claude.ai (db + room + user capabilities).
-   Elsewhere every call below is skipped and the game plays solo. */
-const NET = {db:null, room:null, user:null, uid:null, peers:[], echoes:[], raid:[], chat:[], ready:false, lastPresence:''};
+   Two backends share one shape ({db, room}):
+   • claude.ai: the artifact runtime's db + room + user capabilities.
+   • Tsukimori servers: anyone can host server/server.js; players join from the Village Square.
+   With neither, every call below is skipped and the game plays solo. */
+const NET = {db:null, room:null, user:null, uid:null, peers:[], echoes:[], raid:[], chat:[], ready:false, lastPresence:'', mode:null, server:null, backend:null, list:[]};
 const hashN = (s, m) => { let h = 7; for(const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % m; };
 async function initNet(){
-  if(!(window.claude && window.claude.use)) return;
+  if(!(window.claude && window.claude.use)){ initServers(); return; }
+  NET.mode = 'claude';
   const use = n => window.claude.use(n).catch(() => null);
   const [db, room, user, sample] = await Promise.all([use('db'), use('room'), use('user'), use('sample')]);
   NET.db = db; NET.room = room; NET.user = user;
   if(sample){ GUIDE.sample = sample; try{ const lim = await sample.limits(); GUIDE.mode = lim && lim.tools !== false ? 'claude' : 'offline'; }catch(e){ GUIDE.mode = 'claude'; } }
   if(user) NET.uid = await user.id().catch(() => null);
+  attachNet(db, room);
+  NET.ready = true; renderGuide(); presence(); publishEcho(); netChanged();
+}
+function attachNet(db, room){
   if(db){
     db.collection('echoes').orderBy('rating', 'desc').limit(60).onSnapshot(s => { NET.echoes = s.docs.map(d => Object.assign({id:d.id}, d.data())); netChanged(); }, () => {});
     db.collection('hires').onSnapshot(s => { NET.hires = s.docs.map(d => Object.assign({id:d.id}, d.data())); netChanged(); }, () => {});
@@ -337,7 +344,126 @@ async function initNet(){
     room.on('shout', m => { const d = m.data || {}; NET.chat.push({name:String(d.name || 'Someone').slice(0, 16), text:String(d.text || '').slice(0, 140), me:m.isMe, t:Date.now()}); if(NET.chat.length > 40) NET.chat.shift(); netChanged(); });
     room.on('emote', m => { const d = m.data || {}; showEmote(m.peer, String(d.emoji || '👋').slice(0, 4)); });
   }
-  NET.ready = true; renderGuide(); presence(); publishEcho(); netChanged();
+}
+
+/* ---- Self-hosted servers (server/server.js) ----
+   The adapter below speaks the server's small JSON-over-WebSocket protocol and exposes the same
+   db/room calls as the claude.ai runtime, so the rest of the game doesn't care which one it has. */
+const SERVER_KEY = 'tsukimori_server', SERVERS_KEY = 'tsukimori_servers', TOKENS_KEY = 'tsukimori_server_tokens';
+const lsGet = (k, d) => { try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } };
+const lsSet = (k, v) => { try{ if(v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
+// Your identity on a server is a random secret kept in this browser (one per server).
+function serverToken(url){
+  const t = lsGet(TOKENS_KEY, {}); if(t[url]) return t[url];
+  const a = new Uint8Array(24); crypto.getRandomValues(a); t[url] = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); lsSet(TOKENS_KEY, t); return t[url];
+}
+// "my.host:8787", "https://my.host" or "wss://my.host/ws" → a WebSocket URL
+function normServerUrl(u){
+  u = String(u || '').trim(); if(!u) return '';
+  if(/^https?:\/\//i.test(u)) u = u.replace(/^http/i, 'ws');
+  else if(!/^wss?:\/\//i.test(u)) u = (location.protocol === 'https:' ? 'wss://' : 'ws://') + u;
+  try{ const x = new URL(u); return x.protocol + '//' + x.host + (x.pathname === '/' ? '' : x.pathname.replace(/\/$/, '')); }catch(e){ return ''; }
+}
+const infoUrl = ws => ws.replace(/^ws/i, 'http').replace(/(\/\/[^/]+).*$/, '$1') + '/api/info';
+function wsBackend(url, onStatus){
+  let ws = null, rid = 0, subN = 0, closed = false, retry = 0, presenceData = null, beat = null;
+  const me = {uid:null, peer:null}, pending = new Map(), subs = new Map(), handlers = {}, peerCbs = [];
+  const send = o => { if(ws && ws.readyState === 1){ ws.send(JSON.stringify(o)); return true; } return false; };
+  const req = o => new Promise((resolve, reject) => {
+    const id = ++rid; o.rid = id; if(!send(o)) return reject(new Error('Not connected to the server'));
+    pending.set(id, {resolve, reject}); setTimeout(() => { if(pending.delete(id)) reject(new Error('The server did not answer')); }, 10000);
+  });
+  function open(){
+    onStatus('connecting');
+    try{ ws = new WebSocket(url); }catch(e){ onStatus('error', {err:e.message}); return; }
+    ws.onopen = () => send({t:'hello', v:1, token:serverToken(url)});
+    ws.onmessage = e => { let m; try{ m = JSON.parse(e.data); }catch(err){ return; } recv(m); };
+    ws.onclose = () => {
+      ws = null; clearInterval(beat); for(const p of pending.values()) p.reject(new Error('Disconnected')); pending.clear();
+      if(closed) return; peerCbs.forEach(cb => cb({peers:[]}));
+      const wait = Math.min(30000, 1000 * 2 ** retry++); onStatus('offline', {retryIn:wait}); setTimeout(() => { if(!closed) open(); }, wait);
+    };
+  }
+  function recv(m){
+    if(m.t === 'welcome'){
+      retry = 0; me.uid = m.uid; me.peer = m.peer;
+      for(const [id, sb] of subs) send({t:'sub', id, col:sb.col, orderBy:sb.orderBy, limit:sb.limit});
+      if(presenceData) send({t:'presence', data:presenceData});
+      clearInterval(beat); beat = setInterval(() => send({t:'ping'}), 25000);
+      onStatus('online', m);
+    } else if(m.t === 'ack'){ const p = pending.get(m.rid); if(!p) return; pending.delete(m.rid); if(m.ok) p.resolve(m.doc); else p.reject(new Error(m.err || 'Server error')); }
+    else if(m.t === 'snap'){ const sb = subs.get(m.id); if(sb) sb.cb({docs:(m.docs || []).map(d => ({id:d.id, data:() => d.data}))}); }
+    else if(m.t === 'peers'){ const peers = (m.peers || []).map(p => Object.assign({}, p, {isMe:p.peer === me.peer})); peerCbs.forEach(cb => cb({peers})); }
+    else if(m.t === 'ev'){ (handlers[m.ev] || []).forEach(cb => cb({data:m.data, peer:m.peer, isMe:m.peer === me.peer})); }
+  }
+  const collection = col => { const q = {col, orderBy:null, limit:0}, api = {
+    orderBy:f => (q.orderBy = f, api), limit:n => (q.limit = n, api),
+    onSnapshot:cb => { const id = ++subN; subs.set(id, Object.assign({cb}, q)); send({t:'sub', id, col:q.col, orderBy:q.orderBy, limit:q.limit}); return () => subs.delete(id); }}; return api; };
+  const db = {collection, doc:path => ({set:data => req({t:'set', path, data}), get:() => req({t:'get', path}).then(d => ({exists:!!d, data:() => d}))})};
+  const room = {onPeers:cb => { peerCbs.push(cb); }, on:(ev, cb) => { (handlers[ev] = handlers[ev] || []).push(cb); },
+    emit:(ev, data) => req({t:'emit', ev, data}), presence:data => { presenceData = data; send({t:'presence', data}); return Promise.resolve(); }};
+  setTimeout(open, 0); // after the caller has stored the backend
+  return {db, room, me, close(){ closed = true; clearInterval(beat); if(ws) ws.close(); }};
+}
+function connectServer(url, quiet){
+  url = normServerUrl(url); if(!url) return quiet || toast('That doesn\'t look like a server address');
+  if(location.protocol === 'https:' && /^ws:/i.test(url)) return quiet || toast('This page is on HTTPS, so it can only join wss:// servers. Open the game from the server\'s own address instead.');
+  disconnectServer(true);
+  NET.server = {url, status:'connecting', info:null};
+  const be = wsBackend(url, (st, m) => {
+    if(!NET.server || NET.backend !== be) return;
+    NET.server.status = st;
+    if(st === 'online'){
+      const first = !NET.server.info; NET.server.info = {name:String(m.name || 'Server').slice(0, 40), motd:String(m.motd || '').slice(0, 200)}; NET.uid = m.uid;
+      rememberServer(url, NET.server.info.name); NET.lastPresence = ''; presence(); publishEcho(); if(S && S.squad) publishHires();
+      if(first && !quiet) toast(`Joined ${NET.server.info.name}`);
+    }
+    if(st === 'offline') NET.peers = [];
+    netChanged(); if(UI.screen === 'online') render();
+  });
+  NET.backend = be; NET.db = be.db; NET.room = be.room; NET.mode = 'server'; NET.ready = true;
+  attachNet(be.db, be.room); lsSet(SERVER_KEY, url);
+  if(UI.screen === 'online') render();
+}
+function disconnectServer(keepChoice){
+  if(NET.backend) NET.backend.close();
+  Object.assign(NET, {backend:null, db:null, room:null, uid:null, server:null, mode:null, peers:[], echoes:[], hires:[], raid:[], chat:[], lastPresence:''});
+  if(!keepChoice) lsSet(SERVER_KEY, ''); // '' remembers that the player chose to play offline
+}
+function rememberServer(url, name){
+  const list = lsGet(SERVERS_KEY, []).filter(x => x && x.url !== url); list.unshift({url, name}); lsSet(SERVERS_KEY, list.slice(0, 12));
+}
+async function initServers(){
+  const known = new Map();
+  // A server that serves the game itself is joined automatically.
+  if(/^https?:$/.test(location.protocol)){
+    try{ const r = await fetch('api/info', {cache:'no-store'}); const j = r.ok && await r.json(); if(j && j.tsukimori){ const u = normServerUrl(location.host + location.pathname.replace(/\/[^/]*$/, '')); known.set(u, {url:u, name:j.name, here:true}); if(lsGet(SERVER_KEY, null) === null) lsSet(SERVER_KEY, u); } }catch(e){}
+    try{ const r = await fetch('servers.json', {cache:'no-store'}); const j = r.ok && await r.json(); for(const x of (j && j.servers) || []){ const u = normServerUrl(x.url); if(u && !known.has(u)) known.set(u, {url:u, name:String(x.name || u).slice(0, 40), desc:String(x.description || '').slice(0, 120), community:true}); } }catch(e){}
+  }
+  NET.list = [...known.values()];
+  const saved = lsGet(SERVER_KEY, ''); if(saved) connectServer(saved, true);
+  if(UI.screen === 'online') render();
+}
+function serverRows(){
+  const mine = lsGet(SERVERS_KEY, []), all = [...NET.list], seen = new Set(all.map(x => x.url));
+  for(const x of mine) if(x && x.url && !seen.has(x.url)){ all.push({url:x.url, name:x.name, saved:true}); seen.add(x.url); }
+  return all;
+}
+function serversHTML(){
+  if(NET.mode === 'claude') return '';
+  const sv = NET.server, rows = serverRows();
+  const status = !sv ? '<p class="muted">You\'re playing offline. Join a server to meet other ninja, climb a shared leaderboard and raid together.</p>'
+    : `<div class="srv-now"><span class="srv-dot ${sv.status}"></span><div><b>${esc(sv.info ? sv.info.name : sv.url)}</b><small>${sv.status === 'online' ? `Connected, ${NET.peers.filter(p => !p.isMe).length} other ninja here` : sv.status === 'connecting' ? 'Connecting…' : 'Connection lost, retrying…'}</small>${sv.info && sv.info.motd ? `<small class="srv-motd">📣 ${esc(sv.info.motd)}</small>` : ''}</div><button class="btn sm" data-act="srvLeave">Leave</button></div>`;
+  return `<div class="panel srv"><h3>🌐 Servers</h3>${status}
+    ${rows.length ? `<div class="stack" style="margin-top:8px">${rows.map(x => `<div class="lb"><span class="lb-n">${x.here ? '🏠' : x.community ? '🌍' : '⭐'}</span><span><b>${esc(x.name || x.url)}</b><br><small class="muted">${esc(x.desc || x.url)}</small></span><span></span>${sv && sv.url === x.url ? '<span class="owned">✓ Joined</span>' : `<button class="btn sm primary" data-act="srvJoin" data-arg="${esc(x.url)}">Join</button>`}${x.saved ? `<button class="btn sm ghost" data-act="srvForget" data-arg="${esc(x.url)}" aria-label="Forget this server">✕</button>` : ''}</div>`).join('')}</div>` : ''}
+    <div class="g-in" style="margin-top:10px"><input id="srv-in" placeholder="Server address, e.g. wss://ninja.example.com" autocomplete="off" spellcheck="false"><button class="btn primary" data-act="srvAdd">Join</button></div>
+    <details class="srv-host"><summary>Host your own server</summary>
+      <p>The server is one file with no dependencies. With <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 18+</a>:</p>
+      <pre>git clone https://github.com/Mofferato/tsukimori
+cd tsukimori
+node server/server.js</pre>
+      <p>Friends on your network open <code>http://&lt;your-ip&gt;:8787</code> and are joined automatically. To let anyone in, run it on a host with HTTPS (Render, Fly.io, Railway or any VPS; a <code>Dockerfile</code> is included), then share its <code>wss://</code> address or add it to <code>servers.json</code> with a pull request.</p>
+      <p class="muted">Set <code>SERVER_NAME</code> and <code>MOTD</code> to name your village and greet players.</p></details></div>`;
 }
 function netChanged(){
   const scr = UI.screen;
@@ -369,9 +495,9 @@ function publishRaid(){
   const ev = S.event;
   NET.db.doc('raidhits/' + NET.uid).set({week:ev.week, bossId:ev.bossId, dmg:ev.dmg, pct:+(ev.dmg / ev.pool * 100).toFixed(2), name:S.char.name, updatedAt:Date.now()}).catch(() => {});
 }
-async function cloudSave(){ if(!NET.db || !NET.uid) return toast('Cloud save needs the online version'); try{ await NET.db.doc(`data/users/${NET.uid}/save`).set({json:JSON.stringify(S), savedAt:Date.now()}); toast('Saved to the cloud'); }catch(e){ toast('Cloud save failed: ' + e.message); } }
+async function cloudSave(){ if(!NET.db || !NET.uid) return toast('Cloud save needs a server connection'); try{ await NET.db.doc(`data/users/${NET.uid}/save`).set({json:JSON.stringify(S), savedAt:Date.now()}); toast('Saved to the cloud'); }catch(e){ toast('Cloud save failed: ' + e.message); } }
 async function cloudLoad(){
-  if(!NET.db || !NET.uid) return toast('Cloud save needs the online version');
+  if(!NET.db || !NET.uid) return toast('Cloud save needs a server connection');
   try{ const d = await NET.db.doc(`data/users/${NET.uid}/save`).get(); if(!d.exists) return toast('No cloud save yet'); S = migrate(JSON.parse(d.data().json)); persist(); go('hub'); toast('Cloud save loaded'); }
   catch(e){ toast('Could not load: ' + e.message); }
 }
@@ -391,7 +517,7 @@ function showEmote(peer, emoji){
 }
 function onlineListHTML(){
   const others = NET.peers.filter(p => !p.isMe);
-  if(!NET.room) return '<p class="muted">Multiplayer runs on the Claude-hosted version of Tsukimori. On other hosts, share builds with the Echo Arena\'s copy-and-paste instead.</p>';
+  if(!NET.room) return '<p class="muted">Join a server above to see who else is in the village. You can still share builds with the Echo Arena\'s copy-and-paste.</p>';
   if(!others.length) return '<p class="muted">No one else is in the village right now. Share the game with friends so they can join!</p>';
   return others.map(p => { const pr = p.presence, e = NET.echoes.find(x => x.id === p.by);
     return `<div class="panel oprow" id="op-${esc(p.peer)}"><span class="op-face">${ninjaSVG(pr.look || {}, {}, {viewBox:'18 20 84 84', scarf:(ELEMENTS[pr.element] || ELEMENTS.fire).color})}</span>
@@ -403,7 +529,7 @@ function chatHTML(){
   return NET.chat.map(m => `<div class="shout ${m.me ? 'me' : ''}"><b>${esc(m.name)}</b> ${esc(m.text)}</div>`).join('');
 }
 function boardHTML(){
-  if(!NET.db) return '<p class="muted">The leaderboard needs the online version.</p>';
+  if(!NET.db) return '<p class="muted">Join a server to see its leaderboard.</p>';
   if(!NET.echoes.length) return '<p class="muted">No ninja have posted an echo yet. Play a battle to post yours!</p>';
   return NET.echoes.slice(0, 20).map((e, i) => `<div class="lb ${e.id === NET.uid ? 'me' : ''}"><span class="lb-n">${i + 1}</span><span>${ELEMENTS[e.element] ? ELEMENTS[e.element].icon : ''} <b>${esc(String(e.name).slice(0, 16))}</b> <small class="muted">Lv ${e.level | 0}${e.squad ? `, 👥 squad of ${1 + (e.squad | 0)}` : ''}</small></span><span class="lb-r">${e.rating | 0}</span>
     ${e.id !== NET.uid ? `<button class="btn sm" data-act="fightEcho" data-arg="${esc(e.id)}">Duel</button>` : '<span class="muted" style="font-size:12px">you</span>'}</div>`).join('');
@@ -414,7 +540,7 @@ function raidTotals(){
 }
 const COMMUNITY_GOALS = [{pct:100, shards:10}, {pct:300, shards:20}, {pct:600, shards:40}];
 function raidHTML(){
-  if(!NET.db) return '<p class="muted">Community raids need the online version: everyone\'s damage adds up toward shared rewards.</p>';
+  if(!NET.db) return '<p class="muted">Join a server in the Village Square for community raids: everyone\'s damage adds up toward shared rewards.</p>';
   const {hits, total} = raidTotals(), ev = S.event; ev.commClaimed = ev.commClaimed || [];
   return `<p>All ninja together have dealt <b>${total.toFixed(0)}%</b> of a boss's health this week.</p>
     ${COMMUNITY_GOALS.map((g, i) => { const got = ev.commClaimed.includes(i), ok = total >= g.pct; return `<div class="ms ${got ? 'done' : ''}"><span class="pct">${g.pct}%</span><span>Community goal: 🔴 ${g.shards} shards each</span><button class="btn sm ${ok && !got ? 'primary' : ''}" data-act="commClaim" data-arg="${i}" ${ok && !got ? '' : 'disabled'}>${got ? 'Claimed' : ok ? 'Claim' : 'Locked'}</button></div>`; }).join('')}
@@ -423,6 +549,7 @@ function raidHTML(){
 function onlineScreen(){
   return `<section><h2 class="scr-title">🏮 Village Square</h2>
     <p class="note">${NET.room ? `<b id="net-count">${NET.peers.filter(p => !p.isMe).length}</b> other ninja online right now.` : 'Playing offline.'} Wave, shout and duel the echoes of real players.</p>
+    ${serversHTML()}
     ${NET.room ? `<div class="emote-row">${['👋','😆','🎉','🔥','💪','🙏','😭','🌙'].map(e => `<button class="emo" data-act="emote" data-arg="${e}" aria-label="Send ${e}">${e}</button>`).join('')}</div>` : ''}
     <div id="net-online" class="stack">${onlineListHTML()}</div>
     ${NET.room ? `<h3 class="sub">Shouts</h3><div class="panel"><div id="net-chat" class="chatbox">${chatHTML()}</div>
