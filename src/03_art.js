@@ -25,19 +25,24 @@ function eyeSVG(cx, cy, c, f){
   ${f?`<path d="M${cx+5.2} ${cy-6} l3 -2.4" stroke="#1d1a22" stroke-width="1.6" stroke-linecap="round"/>`:''}`;
 }
 function hairBack(st, c){
+  if(st === 'bob') return `<path d="M31 36 Q21 62 29 82 Q41 86 47 72 L47 40Z" fill="${c}"/><path d="M89 36 Q99 62 91 82 Q79 86 73 72 L73 40Z" fill="${c}"/>`;
+  if(st === 'twin') return `<path d="M35 34 Q6 40 11 90 Q21 75 26 66 Q27 81 34 86 Q30 58 41 46Z" fill="${c}"/><path d="M85 34 Q114 40 109 90 Q99 75 94 66 Q93 81 86 86 Q90 58 79 46Z" fill="${c}"/><circle cx="35" cy="36" r="4" fill="#c43d4b"/><circle cx="85" cy="36" r="4" fill="#c43d4b"/>`;
+  if(st === 'braid') return `<path d="M36 34 Q13 50 19 78 Q23 94 29 108 Q41 98 38 82 Q34 62 45 46Z" fill="${c}"/><path d="M21 68 l11 4 M23 80 l11 4 M26 92 l11 4" stroke="${shade(c, -.28)}" stroke-width="2.2" fill="none" stroke-linecap="round"/><circle cx="35" cy="38" r="4" fill="#c43d4b"/>`;
   if(st === 'ponytail') return `<path d="M36 30 Q6 34 12 86 Q20 66 24 60 Q26 74 31 78 Q30 56 39 44Z" fill="${c}"/><circle cx="36" cy="37" r="4.5" fill="#c43d4b"/>`;
   if(st === 'long') return `<path d="M34 28 Q14 62 22 108 Q34 100 44 106 Q42 82 56 64 L60 28Z" fill="${c}"/>`;
   return '';
 }
 function hairCap(st, c){
+  if(st === 'bun') return `<circle cx="60" cy="13" r="11.5" fill="${c}"/><path d="M31 49 Q27 19 60 18 Q93 19 89 49 Q86 34 60 32 Q34 34 31 49Z" fill="${c}"/><path d="M52 13 Q60 9 68 13" stroke="${shade(c, .25)}" stroke-width="1.6" fill="none" stroke-linecap="round"/>`;
   if(st === 'spiky') return `<path d="M30 47 L23 30 L36 32 L33 13 L48 24 L54 3 L64 20 L77 5 L78 24 L93 16 L88 32 L97 40 L90 47 Q60 22 30 47Z" fill="${c}"/>`;
   return `<path d="M31 49 Q27 19 60 18 Q93 19 89 49 Q86 34 60 32 Q34 34 31 49Z" fill="${c}"/>`;
 }
 function hairBangs(st, c){
   const side = `<path d="M32 44 Q29 58 35 63 L38 46Z" fill="${c}"/>`;
   if(st === 'spiky') return side + `<path d="M37 44 L41 55 L47 45 L53 57 L59 45 L65 55 L71 45 L78 53 L85 44Z" fill="${c}"/>`;
-  if(st === 'short') return side + `<path d="M35 44 Q52 43 67 57 Q66 48 87 44Z" fill="${c}"/>`;
-  if(st === 'ponytail') return side + `<path d="M37 44 L44 54 L52 45 L60 53 L68 45 L76 52 L85 44Z" fill="${c}"/>`;
+  if(st === 'bob') return side + `<path d="M33 45 Q60 35 87 45 L89 57 Q60 49 31 57Z" fill="${c}"/>`;
+  if(st === 'short' || st === 'bun' || st === 'braid') return side + `<path d="M35 44 Q52 43 67 57 Q66 48 87 44Z" fill="${c}"/>`;
+  if(st === 'ponytail' || st === 'twin') return side + `<path d="M37 44 L44 54 L52 45 L60 53 L68 45 L76 52 L85 44Z" fill="${c}"/>`;
   return `<path d="M33 44 Q39 60 35 74 Q46 62 48 46 L73 46 Q74 60 85 71 Q80 56 87 44Z" fill="${c}"/>`;
 }
 function backSVG(b){

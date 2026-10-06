@@ -93,20 +93,7 @@ function sfx(type){
 /* ---------------- Auto-battle (smart local AI for your turns) ---------------- */
 function autoAct(){
   if(!B || !B.awaiting || B.over) return;
-  const p = B.active, t = getTarget(), ready = p.skills.map(id => SKILL[id]).filter(s => s && canUse(p, s));
-  const healS = ready.find(s => s.heal && s.target !== 'ally');
-  if(p.hp < p.maxHp * 0.35){
-    if(healS) return ACT.bSkill(healS.id);
-    const pot = ['moon_elixir','g_salve','salve'].find(id => S.inventory[id] > 0 && S.char.level >= ITEM[id].lvl);
-    if(pot) return ACT.bUse(pot);
-  }
-  const buff = ready.find(s => s.target === 'self' && !s.heal && !s.power && !(s.apply || []).every(a => hasStatus(p, a.s)));
-  if(buff && Math.random() < 0.6) return ACT.bSkill(buff.id);
-  const foes = opponents(p).length;
-  const off = ready.filter(s => s.power).map(s => [s, s.power * s.hits * elemMult(s.el, t.el) * (s.target === 'allEnemies' ? foes : 1) + (s.apply || []).length * 0.2]).sort((a, b) => b[1] - a[1]);
-  if(off.length) return ACT.bSkill(off[0][0].id);
-  if(p.cp < p.maxCp * 0.3) return ACT.bCharge();
-  ACT.bAttack();
+  playerAct(u => { const t = getTarget(); perform(u, smartChoose(u, t), t); });
 }
 
 /* ---------------- AI guide: Momo the lantern spirit ---------------- */
@@ -116,9 +103,10 @@ function guideState(){
   const c = S.char, st = charStats(c); syncDaily(); syncEvent();
   return {name:c.name, level:c.level, rank:rankOf(c.level).name, element:c.element, gold:c.gold, shards:S.shards, unspentPoints:c.points,
     stats:{hp:st.maxHp, chakra:st.maxCp, agility:st.agi, power:st.atk, crit:+st.crit.toFixed(1)}, alloc:c.alloc,
-    equipped:c.equip, loadout:c.loadout, learnedSkills:c.skills, inventory:S.inventory, pet:c.pet, pets:c.pets,
+    equipped:c.equip, loadout:c.loadout, maxLoadout:MAX_LOADOUT, learnedSkills:c.skills, inventory:S.inventory, pet:c.pet, pets:c.pets, petControl:c.petAuto === false ? 'player' : 'auto',
+    talents:c.talents.map((id, i) => ({tier:i, unlocksAtLevel:TALENT_TIERS[i], picked:id || (c.level >= TALENT_TIERS[i] ? 'NONE YET' : 'locked')})),
     clan:c.clan ? {id:c.clan.id, rank:CLAN_TIERS[clanTier(c.clan.rep)].name, rep:c.clan.rep} : null,
-    squad:activeSquad().map(r => ({id:r.id, name:r.name, level:r.level, element:r.element, points:r.points})), roster:S.squad.roster.length,
+    squad:activeSquad().map(r => ({id:r.id, name:r.name, level:r.level, element:r.element, points:r.points, control:r.auto ? 'auto' : 'player', pet:r.pet, petControl:r.petAuto === false ? 'player' : 'auto', talentPicksWaiting:talentsUnpicked(r)})), roster:S.squad.roster.length,
     arenaRating:S.arena.rating, event:{boss:ENEMY[S.event.bossId].name, bossElement:ENEMY[S.event.bossId].el, triesLeft:EVENT_TRIES - S.event.tries, pctDone:Math.round(S.event.dmg / S.event.pool * 100)},
     dailyQuests:S.daily.quests.map((q, i) => ({i, text:QUEST_POOL.find(x => x.id === q.id).text(q.n), progress:questProgress(q), need:q.n, claimed:q.claimed})),
     screen:UI.screen};
@@ -126,7 +114,8 @@ function guideState(){
 function guideList(kind){
   const c = S.char;
   if(kind === 'missions') return MISSIONS.filter(m => m.lvl <= c.level + 2).map(m => ({id:m.id, rank:m.rank, name:m.name, lvl:m.lvl, locked:c.level < m.lvl, clears:(S.missions[m.id] || {}).clears || 0, foes:[...new Set(m.stages.flatMap(s => s.foes.map(f => ENEMY[f[0]].name + ' (' + ENEMY[f[0]].el + ')')))]}));
-  if(kind === 'skills') return SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= c.level + 5).map(s => ({id:s.id, name:s.name, el:s.el, lvl:s.lvl, cp:s.cp, cd:s.cd, price:skillPrice(s), learned:c.skills.includes(s.id), effects:skillTags(s).join(', ')}));
+  if(kind === 'skills') return SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= c.level + 5).map(s => ({id:s.id, name:s.name, family:s.type, el:s.el, lvl:s.lvl, cp:s.cp, cd:s.cd, price:skillPrice(s), learned:c.skills.includes(s.id), effects:skillTags(s).join(', ')}));
+  if(kind === 'talents') return TALENTS.map(t => ({id:t.id, tier:t.tier, unlocksAtLevel:TALENT_TIERS[t.tier], name:t.name, effect:t.desc}));
   if(kind === 'shop') return ITEMS.filter(i => i.shop !== false && !i.shards && i.lvl <= c.level + 3).map(i => ({id:i.id, name:i.name, slot:i.slot, lvl:i.lvl, price:i.price, bonus:i.bonus || i.desc}));
   if(kind === 'pets') return PETS.map(p => ({id:p.id, name:p.name, el:p.el, lvl:p.lvl, price:p.price || null, shards:p.shards || null, owned:c.pets.includes(p.id), desc:p.desc}));
   if(kind === 'clans') return CLANS.map(cl => ({id:cl.id, name:cl.name, lvl:cl.lvl, perks:clanPerkText(cl, 0)}));
@@ -136,15 +125,15 @@ function guideList(kind){
 function need(cond, msg){ if(!cond) throw new Error(msg); }
 const GUIDE_TOOLS = [
   {name:'get_game_state', description:'Returns the player\'s current state: level, gold, stats, gear, techniques, pet, clan, daily quests and event status.', run:() => guideState()},
-  {name:'list_options', description:'Lists what is available. kind is one of missions, skills, shop, pets, clans, arena. Returns ids to use with the other tools.',
-   schema:{type:'object', properties:{kind:{type:'string', enum:['missions','skills','shop','pets','clans','arena']}}, required:['kind']}, run:i => guideList(String(i.kind))},
+  {name:'list_options', description:'Lists what is available. kind is one of missions, skills, shop, pets, clans, arena, talents. Returns ids to use with the other tools. Techniques come in four families: ninjutsu (elemental), taijutsu, genjutsu and kinjutsu.',
+   schema:{type:'object', properties:{kind:{type:'string', enum:['missions','skills','shop','pets','clans','arena','talents']}}, required:['kind']}, run:i => guideList(String(i.kind))},
   {name:'allocate_points', description:'Spends unspent stat points. Give how many go to hp, cp (chakra) and agi. Returns the new stats.', mutates:true,
    schema:{type:'object', properties:{hp:{type:'integer'}, cp:{type:'integer'}, agi:{type:'integer'}}},
    run:i => { const c = S.char, a = {hp:Math.max(0, i.hp | 0), cp:Math.max(0, i.cp | 0), agi:Math.max(0, i.agi | 0)}; need(a.hp + a.cp + a.agi <= c.points, `Only ${c.points} points available`); for(const k in a){ c.alloc[k] += a[k]; c.points -= a[k]; } return charStats(c); }},
   {name:'learn_skill', description:'Learns a technique at the Academy by id (costs gold) and equips it if a loadout slot is free.', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const s = SKILL[i.id], c = S.char; need(s && !s.enemyOnly && !s.petOnly, 'No such technique'); need(!c.skills.includes(s.id), 'Already learned'); need(c.level >= s.lvl, `Requires level ${s.lvl}`); need(c.gold >= skillPrice(s), 'Not enough gold'); c.gold -= skillPrice(s); c.skills.push(s.id); if(c.loadout.length < MAX_LOADOUT) c.loadout.push(s.id); return `Learned ${s.name}`; }},
-  {name:'set_loadout', description:'Sets the battle loadout to up to 6 learned technique ids, in order.', mutates:true,
+  {name:'set_loadout', description:`Sets the battle loadout to up to ${MAX_LOADOUT} learned technique ids, in order. Prefer optimize_team unless the player asked for specific techniques.`, mutates:true,
    schema:{type:'object', properties:{ids:{type:'array', items:{type:'string'}}}, required:['ids']},
    run:i => { const c = S.char, ids = (i.ids || []).map(String).filter(id => c.skills.includes(id)).slice(0, MAX_LOADOUT); need(ids.length, 'None of those are learned'); c.loadout = [...new Set(ids)]; return c.loadout; }},
   {name:'buy_item', description:'Buys an item from the Shop by id. qty defaults to 1.', mutates:true,
@@ -153,12 +142,28 @@ const GUIDE_TOOLS = [
   {name:'equip_item', description:'Equips an owned weapon, clothing, back or accessory item by id.', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const it = ITEM[i.id], c = S.char; need(it && SLOTS.includes(it.slot), 'Not equipment'); need(S.inventory[it.id] > 0, 'Not in inventory'); need(c.level >= it.lvl, `Requires level ${it.lvl}`); const prev = c.equip[it.slot]; if(prev) addInv(prev, 1); addInv(it.id, -1); c.equip[it.slot] = it.id; return `Equipped ${it.name}`; }},
-  {name:'adopt_pet', description:'Adopts a pet by id (gold or Moon Shards) and brings it along.', mutates:true,
-   schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
-   run:i => { const p = PET[i.id], c = S.char; need(p, 'No such pet'); need(!c.pets.includes(p.id), 'Already owned'); need(c.level >= p.lvl, `Requires level ${p.lvl}`);
-     if(p.shards){ need(S.shards >= p.shards, 'Not enough shards'); S.shards -= p.shards; } else { need(c.gold >= p.price, 'Not enough gold'); c.gold -= p.price; } c.pets.push(p.id); c.pet = p.id; return `${p.name} adopted`; }},
-  {name:'set_pet', description:'Chooses which owned pet fights beside the player. Pass an empty id to leave pets home.', mutates:true,
-   schema:{type:'object', properties:{id:{type:'string'}}}, run:i => { const c = S.char; need(!i.id || c.pets.includes(i.id), 'Pet not owned'); c.pet = i.id || null; return c.pet || 'none'; }},
+  {name:'adopt_pet', description:'Adopts a pet by id (paid by the player in gold or Moon Shards) for the player or one of their recruits (owner: "leader" or a recruit id) and brings it along. Every ninja can have one pet.', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, owner:{type:'string'}}, required:['id']},
+   run:i => { const p = PET[i.id], c = S.char, o = ninjaById(i.owner); need(p, 'No such pet'); need(o, 'No such ninja'); need(!o.pets.includes(p.id), 'Already owned'); need(o.level >= p.lvl, `Requires level ${p.lvl}`);
+     if(p.shards){ need(S.shards >= p.shards, 'Not enough shards'); S.shards -= p.shards; } else { need(c.gold >= p.price, 'Not enough gold'); c.gold -= p.price; } o.pets.push(p.id); o.pet = p.id; return `${p.name} adopted for ${o.name}`; }},
+  {name:'set_pet', description:'Chooses which owned pet fights behind a ninja (owner: "leader" or a recruit id). Pass an empty id to leave the pet home.', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, owner:{type:'string'}}}, run:i => { const o = ninjaById(i.owner); need(o, 'No such ninja'); need(!i.id || o.pets.includes(i.id), 'Pet not owned'); o.pet = i.id || null; return o.pet || 'none'; }},
+  {name:'set_control', description:'Chooses who plays a recruit\'s turns in battle (auto: true = the AI, false = the player), and likewise their pet (target "pet"). The leader is always the player\'s (use set_auto_battle).', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, target:{type:'string', enum:['ninja','pet']}, auto:{type:'boolean'}}, required:['id','auto']},
+   run:i => { const r = recruitById(String(i.id)); need(r, 'No such recruit'); if(i.target === 'pet') r.petAuto = !!i.auto; else r.auto = !!i.auto; return `${r.name}${i.target === 'pet' ? "'s pet" : ''} is ${i.auto ? 'on Auto' : 'player-controlled'}`; }},
+  {name:'optimize_team', description:'The all-in-one upgrade. For who = "leader", "all" (leader plus battle squad) or a recruit id: spends stat points, picks open talents, learns the best techniques, sets the best loadout, buys and equips the best gear and tops up supplies, within the player\'s gold. Use this for "gear me up", "optimize", "make me stronger". Returns what changed.', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}}}, run:i => { const l = optimizeTeam(i.who || 'all'); return l.length ? l : 'Everything was already set up well'; }},
+  {name:'auto_gear', description:'Buys and equips the best gear for who ("leader", "all" or a recruit id), spending at most budget gold (default: 90% of the player\'s gold).', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, budget:{type:'integer'}}},
+   run:i => { const ns = (!i.who || i.who === 'all') ? teamNinja() : [ninjaById(i.who)]; need(ns[0], 'No such ninja'); const got = applyGearPlan(gearPlan(ns, Math.min(S.char.gold, i.budget > 0 ? i.budget : Math.floor(S.char.gold * 0.9))).plan); return got.length ? got : 'Already well equipped'; }},
+  {name:'set_talent', description:'Picks a talent (id from list_options talents) for who ("leader" or a recruit id). Tier is 0-5. The first pick of a tier is free, changing it costs gold.', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, id:{type:'string'}}, required:['id']},
+   run:i => { const t = TALENT[i.id]; need(t, 'No such talent'); return pickTalent(ninjaById(i.who), t.tier, t.id); }},
+  {name:'customize_ninja', description:'Renames and restyles the leader or a recruit. Any field is optional: name (max 16), gender (m|f), hairStyle (spiky|short|ponytail|long|bun|bob|twin|braid), and hair, outfit, eyes, skin, bandColor, mask as #rrggbb colors (mask "none" removes it), headband (show|none).', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, name:{type:'string'}, gender:{type:'string'}, hairStyle:{type:'string'}, hair:{type:'string'}, outfit:{type:'string'}, eyes:{type:'string'}, skin:{type:'string'}, bandColor:{type:'string'}, mask:{type:'string'}, headband:{type:'string'}}},
+   run:i => { const c = ninjaById(i.who); need(c, 'No such ninja'); if(i.name){ need(String(i.name).trim(), 'A ninja needs a name'); c.name = String(i.name).trim().slice(0, 16); }
+     for(const k of ['gender', 'hairStyle', 'hair', 'outfit', 'eyes', 'skin', 'bandColor', 'mask']) if(i[k]){ const v = String(i[k]); need(k === 'gender' ? /^[mf]$/.test(v) : k === 'hairStyle' ? HAIR_STYLES.some(h => h.id === v) : k === 'mask' && v === 'none' || /^#[0-9a-f]{6}$/i.test(v), `Bad ${k}`); applyLook(c, k, v); }
+     if(i.headband) applyLook(c, 'band', i.headband === 'none' ? 'none' : 'show'); return `${c.name} looks different`; }},
   {name:'join_clan', description:'Joins a clan by id (200 gold, or 500 to switch).', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const cl = CLAN[i.id], c = S.char, cost = c.clan ? 500 : 200; need(cl, 'No such clan'); need(c.level >= cl.lvl, `Requires level ${cl.lvl}`); need(c.gold >= cost, 'Not enough gold'); c.gold -= cost; c.clan = {id:cl.id, rep:0}; return `Joined ${cl.name}`; }},
@@ -177,8 +182,8 @@ const GUIDE_TOOLS = [
      need(c.level >= EVENTS[0].lvl, 'Event opens at level 5'); syncEvent(); need(S.event.tries < EVENT_TRIES, 'No attempts left today'); GUIDE.pending = () => startEvent(); return 'Will start the Crimson Moon attempt'; }},
 ];
 const GUIDE_RULES = `You are Momo, a cheerful little lantern spirit who guides players of "Tsukimori", a cute turn-based ninja RPG in a moon-forest village. Speak warmly and briefly (2-5 short sentences, playful but clear; no markdown headers).
-Game facts: Elements counter wheel Fire>Wind>Lightning>Earth>Water>Fire (+25% strong, -25% weak). Stat points: hp +10 HP, cp +6 Chakra, agi +2 Agility (turn order, dodge, crit). Power comes from level, weapon and clan. Techniques cost Chakra and have cooldowns; Charge restores Chakra. Off-element techniques cost double. Missions D(1+) C(10+) B(20+) A(35+) S(50+). Pets fight beside you and gain bond. Clans give passive perks that grow with reputation. Echo Arena fights AI ghosts of other builds. Crimson Moon is a weekly boss with 3 tries a day. Daily quests and a login streak give rewards.
-You can act for the player with the tools. Check get_game_state before advising. When asked to do something, do it, then say plainly what you changed. Don't spend more than the player asked; if a request is vague ("gear me up"), prefer good value and keep some gold for supplies. Never invent ids: use list_options.`;
+Game facts: Elements counter wheel Fire>Wind>Lightning>Earth>Water>Fire (+25% strong, -25% weak). Stat points: hp +10 HP, cp +6 Chakra, agi +2 Agility (turn order, dodge, crit). Power comes from level, weapon and clan. Techniques cost Chakra and have cooldowns, and every technique hits much harder than a basic attack; Charge restores Chakra (about 35%) and braces with Guard. The loadout holds 8 techniques in four families: ninjutsu (the five elements; off-element costs double), taijutsu (cheap many-hit body arts), genjutsu (blind, sleep, confuse, silence) and kinjutsu (huge power for a share of your own HP). Talents: one pick per tier at levels 5, 12, 20, 30, 40 and 50. Every ninja (the player and each recruit) can have one pet, and the player can command a recruit or pet or leave it on Auto. Prefer the optimize_team tool for upgrade requests. Missions D(1+) C(10+) B(20+) A(35+) S(50+). Pets fight beside you and gain bond. Clans give passive perks that grow with reputation. Echo Arena fights AI ghosts of other builds. Crimson Moon is a weekly boss with 3 tries a day. Daily quests and a login streak give rewards.
+You can act for the player with the tools. Check get_game_state before advising. When asked to do something, do it, then say plainly what you changed. Don't spend more than the player asked; if a request is vague ("gear me up"), prefer good value and keep some gold for supplies. Never invent ids: use list_options. Spend the player's gold carefully and report plainly what you changed.`;
 function guideSay(role, text, extra){ GUIDE.msgs.push({role, text, extra}); if(GUIDE.msgs.length > 40) GUIDE.msgs.shift(); renderGuideMsgs(); }
 function renderGuide(){
   const g = $('#guide'); if(!g) return;
@@ -256,13 +261,9 @@ function suggestions(){
     out.push({text:`Spend your ${c.points} stat points (${a.hp} HP, ${a.cp} Chakra, ${a.agi} Agility suits a ${ELEMENTS[c.element].name} ninja).`, tool:'allocate_points', input:a}); }
   const claim = S.daily.quests.some(q => !q.claimed && questProgress(q) >= q.n) || EVENT_MILESTONES.some((m, i) => !S.event.claimed.includes(i) && S.event.dmg / S.event.pool * 100 >= m.pct);
   if(claim) out.push({text:'You have rewards waiting to be claimed.', tool:'claim_rewards', input:{}});
-  const sk = SKILLS.find(s => s.el === c.element && !s.enemyOnly && !s.petOnly && s.lvl <= c.level && !c.skills.includes(s.id) && c.gold >= s.price);
-  if(sk) out.push({text:`Learn ${sk.name} at the Academy for ${sk.price} gold.`, tool:'learn_skill', input:{id:sk.id}});
-  for(const sl of SLOTS){
-    const cur = ITEM[c.equip[sl]], score = it => it ? Object.entries(it.bonus || {}).reduce((a, [k, v]) => a + v * ({hp:.25, cp:.3, agi:2, atk:2.5, crit:1.5, dodge:1.5}[k] || 1), 0) : 0;
-    const best = ITEMS.filter(i => i.slot === sl && i.shop !== false && !i.shards && i.lvl <= c.level && i.price <= c.gold * 0.8).sort((a, b) => score(b) - score(a))[0];
-    if(best && score(best) > score(cur) * 1.15 && !(S.inventory[best.id] > 0)){ out.push({text:`Buy and equip ${best.name} (${fmtBonus(best.bonus)}) for ${best.price} gold.`, tool:'buy_equip', input:{id:best.id}}); break; }
-  }
+  { const L = autoLearn(JSON.parse(JSON.stringify(c)), Math.floor(c.gold * 0.6)); if(L.bought.length) out.push({text:`Learn ${L.bought.slice(0, 3).join(', ')} at the Academy (🪙 ${L.spent}). I'll set your best loadout too.`, tool:'optimize_team', input:{who:'leader'}}); }
+  if(talentsUnpicked(c)) out.push({text:`You have ${talentsUnpicked(c)} talent pick${talentsUnpicked(c) > 1 ? 's' : ''} waiting. I can choose the best for your build.`, tool:'optimize_team', input:{who:'leader'}});
+  { const gp = gearPlan(teamNinja(), Math.floor(c.gold * 0.8)); if(gp.plan.length) out.push({text:`Upgrade gear for ${[...new Set(gp.plan.map(x => x.c.name))].join(' and ')}: ${gp.plan.slice(0, 3).map(x => x.it.name).join(', ')}${gp.plan.length > 3 ? ' and more' : ''} (🪙 ${gp.plan.reduce((a, x) => a + x.price, 0)}).`, tool:'auto_gear', input:{who:'all'}}); }
   if(c.level >= SQUAD_LVL && S.squad.roster.length < MAX_SQUAD){ syncPool(); const pi = S.squad.pool.findIndex(r => r.cost <= c.gold * 0.7); if(pi >= 0) out.push({text:`Recruit ${S.squad.pool[pi].name} (${ELEMENTS[S.squad.pool[pi].element].name}, Lv ${S.squad.pool[pi].level}) for ${S.squad.pool[pi].cost} gold. Squadmates fight beside you!`, tool:'recruit_ninja', input:{index:pi}}); }
   for(const r of activeSquad()) if(r.points){ out.push({text:`${r.name} has ${r.points} points to spend.`, tool:'manage_recruit', input:{id:r.id, auto:true}}); break; }
   for(const r of activeSquad()) if(r.level < c.level && trainsLeft(r) > 0 && c.gold >= trainCost(r) * 3){ out.push({text:`Train ${r.name} (Lv ${r.level}) for ${trainCost(r)} gold.`, tool:'train_recruit', input:{id:r.id}}); break; }
@@ -276,7 +277,10 @@ function suggestions(){
 }
 const FAQ = [
   [/element|weak|strong|counter/i, 'Follow the wheel: Fire beats Wind, Wind beats Lightning, Lightning beats Earth, Earth beats Water, Water beats Fire. Strong hits deal +25%, weak ones −25%. Look for the ▲ on your skill buttons!'],
-  [/chakra|cp|charge/i, 'Techniques cost Chakra. When you run low, use Charge to recover about a third of it, or drink a Chakra Pill.'],
+  [/chakra|cp|charge/i, 'Techniques cost Chakra, and every one of them beats a basic attack. You also regain a little each turn. When you run low, Charge: it restores about 35% and braces you with Guard until your next turn. Chakra Pills work too.'],
+  [/talent/i, 'Talents unlock at levels 5, 12, 20, 30, 40 and 50, one pick per tier. Open the Ninja screen to choose, or tap Auto-pick and I will choose the best for your build.'],
+  [/taijutsu|genjutsu|kinjutsu|famil|type/i, 'Besides the five elements there are three element-free families at the Academy: Taijutsu (cheap, many-hit body arts), Genjutsu (blind, sleep, confuse and silence foes) and Kinjutsu (huge power, but each cast costs health).'],
+  [/customi|appearance|rename|name|look|hair/i, 'Open the Ninja screen and tap "Name and appearance" to rename your ninja and change their hair, outfit, eyes, skin and more. Squadmates have the same option on their Manage screen.'],
   [/point|stat|agil/i, 'Each level gives 3 points. HP keeps you standing, Chakra fuels techniques, and Agility makes you act first, dodge and crit more.'],
   [/squad|team|recruit|train/i, 'At the Squad Lodge you can recruit up to 6 ninja and bring 2 into battle. You command their turns too! Train them with gold, teach them techniques, and online you can even hire echoes of real players.'],
   [/pet|den/i, 'Pets from the Beast Den fight beside you on their own. They get stronger with bond every time you win together.'],
@@ -292,7 +296,7 @@ function offlineGuide(text){
   if(hit && !/next|do|help|spend|gear|pick|claim/i.test(text)) return guideSay('momo', hit[1]);
   let pick = sug;
   if(/spend|point/i.test(text)) pick = sug.filter(s => s.tool === 'allocate_points');
-  else if(/gear|equip|buy/i.test(text)) pick = sug.filter(s => s.tool === 'buy_equip');
+  else if(/gear|equip|buy/i.test(text)) pick = sug.filter(s => s.tool === 'auto_gear' || s.tool === 'buy_equip');
   else if(/mission|fight|battle/i.test(text)) pick = sug.filter(s => s.tool === 'start_battle');
   else if(/claim|reward/i.test(text)) pick = sug.filter(s => s.tool === 'claim_rewards');
   if(!pick.length) return guideSay('momo', /spend|point/i.test(text) ? 'You have no unspent points right now.' : /gear/i.test(text) ? 'Your gear is looking good for your level and budget!' : /claim/i.test(text) ? 'Nothing to claim yet. Keep going!' : 'Hmm, I have no special tips right now. A mission is always a good idea!');
@@ -307,6 +311,7 @@ function guideDo(i){
     let r;
     if(s.tool === 'buy_equip'){ GUIDE_TOOLS.find(t => t.name === 'buy_item').run(s.input); r = GUIDE_TOOLS.find(t => t.name === 'equip_item').run(s.input); }
     else r = GUIDE_TOOLS.find(t => t.name === s.tool).run(s.input);
+    if(Array.isArray(r)) r = r.join('. ');
     persist(); GUIDE.undo = snap; GUIDE.offerList = null;
     GUIDE.msgs.forEach(m => { m.extra = null; });
     guideSay('momo', typeof r === 'string' ? r + '!' : 'All done!');
@@ -686,11 +691,11 @@ function presence(){
   const k = JSON.stringify(p); if(k === NET.lastPresence) return; NET.lastPresence = k;
   NET.room.presence(p).catch(() => {});
 }
-function buildOf(c){ return {name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:c.bond[c.pet] || 0} : {}, clan:c.clan}; }
+function buildOf(c){ return {name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, talents:c.talents, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:(c.bond || {})[c.pet] || 0} : {}, clan:c.clan}; }
 function publishEcho(){
   if(!NET.db || !mineUid() || !S || !S.char) return;
   const c = S.char;
-  const sq = activeSquad(), build = Object.assign(buildOf(c), {squad:sq.map(r => ({name:r.name, element:r.element, level:r.level, look:r.look, alloc:r.alloc, equip:r.equip, skills:r.skills, loadout:r.loadout}))});
+  const sq = activeSquad(), build = Object.assign(buildOf(c), {squad:sq.map(r => Object.assign(buildOf(r), {clan:null}))});
   NET.db.doc('echoes/' + NET.uid).set({name:c.name, level:c.level, element:c.element, rating:S.arena.rating, power:buildPower(c, sq), squad:sq.length, build:JSON.stringify(build), updatedAt:Date.now()}).catch(() => {});
 }
 function publishRaid(){

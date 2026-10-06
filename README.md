@@ -11,13 +11,17 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 ## Features
 
 - **Character creation**: body, 4 hairstyles, hair, outfit, eye and skin colors, and a starting element.
-- **Turn-based combat** for up to 3 vs 3: Agility-based turn order, Chakra and cooldowns, burn, bleed, stun, slow, weaken, expose, empower, guard, haste and regen, floating damage numbers, auto-battle and a 1–3× speed toggle.
+- **Turn-based combat** for up to 6 vs 6 (three ninja and their pets): Agility-based turn order, Chakra and cooldowns, burn, bleed, stun, slow, weaken, expose, empower, guard, haste and regen, floating damage numbers, auto-battle and a 1–3× speed toggle.
 - **Element wheel**: Fire > Wind > Lightning > Earth > Water > Fire (+25% / −25%).
-- **Progression**: level cap 60, 3 stat points per level (spend them yourself or tap Auto-assign, also offered on the battle results screen), 5 ranks (Lantern Pupil to Eclipse Warden), 35 player techniques over 7 tiers.
+- **Techniques**: 8 loadout slots and 53 techniques in four families. **Ninjutsu** is elemental (5 elements, 7 tiers). **Taijutsu** is cheap, many-hit body arts. **Genjutsu** blinds, silences, confuses or sleeps foes. **Kinjutsu** is forbidden power paid for with your own HP. Every technique hits harder than a basic attack, and each battle button shows its Chakra cost, cooldown and expected damage. **Charge** restores 35% Chakra and braces you with Guard until your next turn.
+- **Talents**: one pick per tier at levels 5, 12, 20, 30, 40 and 50 (18 talents), with an Auto-pick that reads your loadout.
+- **Progression**: level cap 60, 3 stat points per level (spend them yourself or tap Auto-assign, also offered on the battle results screen), 5 ranks (Lantern Pupil to Eclipse Warden).
+- **Optimize**: one tap picks talents, learns the best techniques, sets the best 8, and buys and equips the best gear (a budget-aware knapsack, so it never buys a tier just to replace it). Works for you, one squadmate, or the whole team, and Momo can do it for you.
+- **Appearance**: rename any ninja and change hairstyle (8), hair, outfit, eyes, skin, headband and face wrap, with free colour pickers.
 - **22 missions** across D, C, B, A and S ranks, 32 enemies, boss enrage phases and first-clear rewards.
 - **Shop and gear**: 40+ items that change how your ninja looks.
-- **Squad Lodge**: recruit up to 6 ninja, bring 2 into every battle and command their turns yourself. Train them, give them gear and spend their stat points. When a squadmate levels up you get a notice with a shortcut to their stat page, and they learn each new technique of their element for free, swapping it in for their weakest one (or turn that off and choose yourself).
-- **Beast Den**: 7 pets that fight beside you and grow with bond.
+- **Squad Lodge**: recruit up to 6 ninja and bring 2 into every battle. Each one is played by you or by the AI (**Auto**), switchable at any moment from the battle screen. Train them, give them gear, talents and techniques, and spend their stat points. When a squadmate levels up they learn each new technique of their element for free, and the AI re-picks their best loadout and talents (or turn that off and choose yourself).
+- **Beast Den**: 7 pets that grow with bond. Every ninja, you and each squadmate, can have their own pet standing behind them, played by you or by the AI.
 - **Clan Hall**: 6 clans with perks that scale with reputation rank.
 - **Echo Arena**: PvP against AI ghosts of generated builds, your own build, friends' pasted builds, and real players online.
 - **Crimson Moon**: a weekly rotating boss with shared HP, 3 tries a day, milestones and a Moon Shard shop.
@@ -105,10 +109,24 @@ src/04_engine.js  state, saves, stats, units, battle engine, runs (missions, are
 src/05a_hostcore.js  multiplayer host rules, shared by server/server.js and "Host on this device"
 src/05_extra.js   quests, achievements, sound, auto-battle, Momo the guide, multiplayer (claude.ai and server backends)
 src/06_squad.js   recruiting, training and managing squadmates
+src/06a_auto.js   talents, value-based technique ranking, loadout and gear optimizer (shared with the battle AI's value model)
 src/07_ui.js      screens, battle view and input actions
 ```
 
 Edit files in `src/`, run `./build.sh`, then open `index.html`.
+
+### Dev tools (optional, not shipped)
+
+`tools/` runs the game's real source headlessly in Node:
+
+```sh
+node tools/balance.js [srcDir] [runs]   # technique damage vs a basic attack, duels, win rate on every mission
+node tools/families.js [runs]           # build-vs-build duels across the four technique families (TUNE='{...}' to try numbers)
+node tools/loadouts.js                  # what the auto-loadout picks at several levels
+node tools/smoke.js                     # clicks through every screen and several battles in jsdom (npm i jsdom)
+```
+
+When you change a technique, check `balance.js` (techniques should beat a basic attack; missions should stay winnable) and `families.js` (no family far above or below the rest).
 
 ## Adding content
 
@@ -116,7 +134,8 @@ Everything is data. Add an entry and it shows up in the game:
 
 - **Mission**: push to `MISSIONS` with `rank`, `lvl` and `stages: [{foes: [['enemyId', level], ...]}]`. XP and gold scale automatically.
 - **Enemy**: push to `ENEMIES` with a sprite `kind` (`ninja`, `serpent`, `bird`, `puppet`, `beast` or `spirit`), an `el` element and `hpM`/`atkM`/`agiM` multipliers.
-- **Technique**: push to `SKILLS` (`power`, `hits`, `target`, `apply: [{s: 'burn', dur, pow, chance}]`, `heal` and so on).
+- **Technique**: push to `SKILLS` (`type`: `ninjutsu`/`taijutsu`/`genjutsu`/`kinjutsu`, `power`, `hits`, `target`, `apply: [{s: 'burn', dur, pow, chance}]`, `heal`, `hpCost`, `leech`, `pierce` and so on). Non-ninjutsu techniques use `el: null`.
+- **Talent**: push to `TALENTS` with a `tier` (0-5) and an `fx` object (see the comment above it).
 - **Item, pet or clan**: push to `ITEMS`, `PETS` or `CLANS`.
 - **Guide tool**: add to `GUIDE_TOOLS` with a `name`, a `description`, a JSON `schema` and a `run(input)` function.
 
