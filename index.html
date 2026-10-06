@@ -494,6 +494,54 @@ body{background-image:radial-gradient(var(--dot) 1.4px,transparent 1.6px),radial
 @keyframes pop{from{transform:scale(.92);opacity:0}}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translate(-50%,40px);opacity:0;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;font-weight:700;transition:.25s;z-index:60;pointer-events:none;max-width:90vw;text-align:center}
 #toast.show{transform:translate(-50%,0);opacity:1}
+/* ---- talents, control, pets behind their ninja, appearance ---- */
+.acts-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.acts-row small{flex:1 1 180px}
+.hl{color:var(--hi)}
+.lo-slots{grid-template-columns:repeat(4,1fr)}
+@media(min-width:560px){.lo-slots{grid-template-columns:repeat(8,1fr)}}
+.tag.dmg{color:var(--good);border-color:var(--good)}
+.sbtn{min-height:84px}
+.stg{font-size:10px;line-height:1.2}
+.abtn small{font-size:10px;font-weight:700;opacity:.85;line-height:1.1;text-align:center}
+.grp{display:flex;align-items:flex-end;gap:2px;width:100%;max-width:340px}
+.grp .unit{width:auto;max-width:none;min-width:0}
+.grp .unit.pet{flex:0 0 40%}
+.grp .unit:not(.pet){flex:1 1 60%}
+.grp .unit.pet .sprite,.side.multi .grp .unit.pet .sprite{height:54px}
+.grp .unit.pet .plate{font-size:10.5px;padding:3px 4px 1px}
+.grp .unit.pet .ulv{display:none}
+.grp .unit.pet .bars .bar b{font-size:9px}
+.sprite-wrap .ctl{position:absolute;left:-2px;top:-2px;z-index:3;border:2px solid var(--line);background:var(--panel);border-radius:999px;font-size:12px;line-height:1;padding:3px 5px;cursor:pointer;color:var(--ink)}
+.ctlstrip{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:6px}
+.ctlchip{border:2px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;cursor:pointer}
+.ctlchip.auto{border-color:var(--cp);color:var(--cp)}
+.ps,.sq-sp,.doll-sprite{position:relative}
+.ps>svg,.sq-sp>svg,.doll-sprite>svg{position:relative;z-index:1}
+.ps-pet{position:absolute;left:-16px;bottom:2px;width:48%;z-index:0;pointer-events:none}
+.ps-pet svg,.sq-sp .ps-pet svg,.ghost .ps .ps-pet svg{width:100%;height:auto;display:block;transform:none}
+.ps-pet.big{left:-8%;width:36%}
+.pet-line{display:flex;gap:12px;align-items:center}
+.pet-line .ps svg{width:60px;height:84px;display:block}
+.pet-line small{display:block}
+.talents{display:flex;flex-direction:column;gap:10px}
+.tal-head{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+.tal-tier{border-top:1px dashed var(--line);padding-top:8px}
+.tal-tier.locked{opacity:.55}
+.tal-lv{font-size:12px;font-weight:800;color:var(--muted);margin-bottom:6px}
+.tal-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px}
+.tal{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:2px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:14px;padding:7px 9px;cursor:pointer;min-width:0}
+.tal .tal-ic{font-size:18px}
+.tal b{font-size:13px}
+.tal small{font-size:11.5px;color:var(--muted);line-height:1.25}
+.tal.on{border-color:var(--hi);background:color-mix(in srgb,var(--hi) 16%,var(--panel2))}
+.tal:disabled{cursor:not-allowed}
+.name-row{display:flex;gap:8px}
+.name-row input{flex:1;min-width:0}
+.sw.custom{position:relative;display:grid;place-items:center;background:conic-gradient(#e8553a,#d4a012,#2fa37a,#3a8fd9,#8a3fbf,#e8553a);overflow:hidden;cursor:pointer;color:#fff;font-weight:800}
+.sw.custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;padding:0;border:0}
+.sw.custom span{pointer-events:none;text-shadow:0 1px 2px #000}
+.sw.none{display:grid;place-items:center;background:var(--panel2);font-size:13px;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition:none!important}}
 </style>
 </head>
@@ -525,7 +573,13 @@ body{background-image:radial-gradient(var(--dot) 1.4px,transparent 1.6px),radial
    • Save format: the whole S object as JSON (versioned; see migrate()).
    ===================================================================== */
 
-const MAX_LEVEL = 60, POINTS_PER_LEVEL = 3, MAX_LOADOUT = 6;
+const MAX_LEVEL = 60, POINTS_PER_LEVEL = 3, MAX_LOADOUT = 8;
+// A plain attack is deliberately weaker than any real technique; techniques are what you spend Chakra on.
+const BASIC_POWER = 0.9;
+// Charge: spend the turn gathering Chakra. It also braces you (Guard) until your next turn.
+const CHARGE = {cp:0.35, flat:4, guard:true};
+// Chakra regained for free at the start of every turn, as a share of max Chakra (talents add to it).
+const CP_REGEN = 0.03;
 
 const ELEMENTS = {
   fire:      {name:'Fire',      icon:'🔥', color:'#e8553a', beats:'wind',      style:'Burst damage and lingering burns.'},
@@ -569,54 +623,94 @@ const STATUSES = {
   guard:   {name:'Guard',   icon:'🛡️', kind:'buff',   desc:'Takes 35% less damage.'},
   haste:   {name:'Haste',   icon:'💨', kind:'buff',   desc:'Agility +40% and +10% dodge.'},
   regen:   {name:'Regen',   icon:'🌿', kind:'buff',   scale:'maxhp', desc:'Heals part of max HP each turn.'},
+  // illusions and forbidden arts
+  sleep:   {name:'Sleep',   icon:'😴', kind:'debuff', desc:'Loses turns until woken. Any damage wakes it.'},
+  confuse: {name:'Confuse', icon:'😵', kind:'debuff', desc:'Half the time, attacks a random fighter on its own side.'},
+  blind:   {name:'Blind',   icon:'🌫️', kind:'debuff', desc:'Attacks miss 30% more often.'},
+  silence: {name:'Silence', icon:'🤐', kind:'debuff', desc:'Cannot use techniques. Basic attacks only.'},
+  frenzy:  {name:'Frenzy',  icon:'😈', kind:'buff',   desc:'Deals 50% more damage but takes 20% more.'},
+  vamp:    {name:'Siphon',  icon:'🩸', kind:'buff',   desc:'Heals for 35% of the damage you deal.'},
+  focus:   {name:'Focus',   icon:'🎯', kind:'buff',   desc:'+25% critical chance.'},
+  evasion: {name:'Evasion', icon:'🌀', kind:'buff',   desc:'+25% dodge.'},
 };
+// Technique families. Ninjutsu is elemental (the five elements); the rest have no element, so the wheel never helps or hurts them.
+const TECH_TYPES = {
+  ninjutsu: {name:'Ninjutsu', icon:'🔥', color:'#e8553a', blurb:'Elemental arts. Strong or weak depending on the foe\'s element.'},
+  taijutsu: {name:'Taijutsu', icon:'🥋', color:'#d9822b', blurb:'Body arts: cheap, fast and many-hit. No element, so never resisted.'},
+  genjutsu: {name:'Genjutsu', icon:'🌀', color:'#8a3fbf', blurb:'Illusions: blind, confuse, silence or put foes to sleep.'},
+  kinjutsu: {name:'Kinjutsu', icon:'☠️', color:'#8a2a3a', blurb:'Forbidden arts: huge power, paid for with your own health.'},
+};
+const TYPE_ORDER = ['ninjutsu','taijutsu','genjutsu','kinjutsu'];
 
 /* SKILLS — target: 'enemy' (default) | 'self' | 'allEnemies'
+   type = 'ninjutsu' (elemental, el set) | 'taijutsu' | 'genjutsu' | 'kinjutsu' (el null: no element)
    power = multiplier of the user's Power per hit, hits = number of hits
-   apply = [{s:status, dur, pow, chance, on:'self'}], heal/cpRestore = share of max */
+   apply = [{s:status, dur, pow, chance, on:'self'}], heal/cpRestore = share of max
+   hpCost = share of max HP paid to cast, leech = share of damage dealt that heals you, pierce = ignores Guard */
 const TIER_PRICE = {1:40, 3:90, 6:180, 10:320, 15:520, 22:850, 35:1400};
 const SKILLS = [
   // FIRE
-  {id:'fire_spark',   el:'fire', lvl:1,  name:'Spark Palm',      icon:'✋', cp:8,  cd:1, power:1.35, desc:'A palm strike wrapped in sparks.'},
-  {id:'fire_cinder',  el:'fire', lvl:3,  name:'Cinder Bloom',    icon:'🌺', cp:12, cd:3, power:0.8, apply:[{s:'burn',dur:3,pow:0.35}], desc:'Scatters embers that cling and burn.'},
+  {id:'fire_spark',   el:'fire', lvl:1,  name:'Spark Palm',      icon:'✋', cp:8,  cd:1, power:1.55, desc:'A palm strike wrapped in sparks.'},
+  {id:'fire_cinder',  el:'fire', lvl:3,  name:'Cinder Bloom',    icon:'🌺', cp:12, cd:3, power:1.1, apply:[{s:'burn',dur:3,pow:0.4}], desc:'Scatters embers that cling and burn.'},
   {id:'fire_resolve', el:'fire', lvl:6,  name:'Kindled Resolve', icon:'🕯️', cp:14, cd:4, target:'self', apply:[{s:'empower',dur:3}], desc:'Stoke your inner flame to hit harder.'},
-  {id:'fire_hearth',  el:'fire', lvl:10, name:'Hearthfire Mend', icon:'♨️', cp:18, cd:4, target:'self', heal:0.22, apply:[{s:'regen',dur:2,pow:0.05}], desc:'Warmth knits your wounds closed.'},
-  {id:'fire_flare',   el:'fire', lvl:15, name:'Flare Burst',     icon:'💥', cp:22, cd:3, power:1.8, apply:[{s:'weaken',dur:2}], desc:'A blinding blast that rattles the foe.'},
-  {id:'fire_sunfall', el:'fire', lvl:22, name:'Crimson Sunfall', icon:'☀️', cp:32, cd:5, power:2.6, apply:[{s:'burn',dur:3,pow:0.5}], desc:'Call down a falling sun of flame.'},
+  {id:'fire_hearth',  el:'fire', lvl:10, name:'Hearthfire Mend', icon:'♨️', cp:18, cd:4, target:'self', heal:0.26, apply:[{s:'regen',dur:2,pow:0.05}], desc:'Warmth knits your wounds closed.'},
+  {id:'fire_flare',   el:'fire', lvl:15, name:'Flare Burst',     icon:'💥', cp:22, cd:3, power:2.4, apply:[{s:'weaken',dur:2}], desc:'A blinding blast that rattles the foe.'},
+  {id:'fire_sunfall', el:'fire', lvl:22, name:'Crimson Sunfall', icon:'☀️', cp:32, cd:5, power:3.4, apply:[{s:'burn',dur:3,pow:0.5}], desc:'Call down a falling sun of flame.'},
   // WIND
-  {id:'wind_razor',   el:'wind', lvl:1,  name:'Razor Breeze',    icon:'🍃', cp:8,  cd:1, power:1.15, apply:[{s:'bleed',dur:2,pow:0.25,chance:0.6}], desc:'A thin gust sharp enough to cut.'},
+  {id:'wind_razor',   el:'wind', lvl:1,  name:'Razor Breeze',    icon:'🍃', cp:8,  cd:1, power:1.4, apply:[{s:'bleed',dur:2,pow:0.25,chance:0.6}], desc:'A thin gust sharp enough to cut.'},
   {id:'wind_tail',    el:'wind', lvl:3,  name:'Tailwind Step',   icon:'💨', cp:10, cd:4, target:'self', apply:[{s:'haste',dur:3}], desc:'Ride the wind: faster and harder to hit.'},
-  {id:'wind_cyclone', el:'wind', lvl:6,  name:'Cyclone Kick',    icon:'🌀', cp:14, cd:2, power:0.8, hits:2, desc:'Two spinning kicks in one breath.'},
-  {id:'wind_whisper', el:'wind', lvl:10, name:'Whisper Cut',     icon:'🗡️', cp:18, cd:3, power:1.3, critBonus:40, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A silent slash aimed at weak points.'},
-  {id:'wind_snare',   el:'wind', lvl:15, name:'Vacuum Snare',    icon:'🫧', cp:20, cd:4, power:0.6, apply:[{s:'slow',dur:2},{s:'expose',dur:2}], desc:'Steal the air around the foe.'},
-  {id:'wind_tempest', el:'wind', lvl:22, name:'Thousand-Leaf Tempest', icon:'🌪️', cp:32, cd:5, power:0.9, hits:3, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A storm of razor leaves.'},
+  {id:'wind_cyclone', el:'wind', lvl:6,  name:'Cyclone Kick',    icon:'🌀', cp:14, cd:2, power:0.95, hits:2, desc:'Two spinning kicks in one breath.'},
+  {id:'wind_whisper', el:'wind', lvl:10, name:'Whisper Cut',     icon:'🗡️', cp:18, cd:3, power:1.7, critBonus:40, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A silent slash aimed at weak points.'},
+  {id:'wind_snare',   el:'wind', lvl:15, name:'Vacuum Snare',    icon:'🫧', cp:20, cd:4, power:1.3, apply:[{s:'slow',dur:2},{s:'expose',dur:2}], desc:'Steal the air around the foe.'},
+  {id:'wind_tempest', el:'wind', lvl:22, name:'Thousand-Leaf Tempest', icon:'🌪️', cp:32, cd:5, power:1.1, hits:3, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A storm of razor leaves.'},
   // LIGHTNING
-  {id:'ltn_jab',      el:'lightning', lvl:1,  name:'Static Jab',      icon:'👊', cp:8,  cd:1, power:1.2, apply:[{s:'stun',dur:1,chance:0.2}], desc:'A charged jab that can lock muscles.'},
-  {id:'ltn_arc',      el:'lightning', lvl:3,  name:'Arc Chain',       icon:'🔗', cp:14, cd:3, power:1.0, target:'allEnemies', desc:'Lightning leaps between every foe.'},
+  {id:'ltn_jab',      el:'lightning', lvl:1,  name:'Static Jab',      icon:'👊', cp:8,  cd:1, power:1.45, apply:[{s:'stun',dur:1,chance:0.2}], desc:'A charged jab that can lock muscles.'},
+  {id:'ltn_arc',      el:'lightning', lvl:3,  name:'Arc Chain',       icon:'🔗', cp:14, cd:3, power:1.25, target:'allEnemies', desc:'Lightning leaps between every foe.'},
   {id:'ltn_surge',    el:'lightning', lvl:6,  name:'Nerve Surge',     icon:'🧠', cp:14, cd:4, target:'self', apply:[{s:'empower',dur:2},{s:'haste',dur:2}], desc:'Overclock your reflexes.'},
-  {id:'ltn_needle',   el:'lightning', lvl:10, name:'Thunder Needle',  icon:'📍', cp:18, cd:3, power:1.6, apply:[{s:'slow',dur:2}], desc:'A bolt that numbs on impact.'},
-  {id:'ltn_coil',     el:'lightning', lvl:15, name:'Paralysis Coil',  icon:'🌩️', cp:22, cd:5, power:0.7, apply:[{s:'stun',dur:1}], desc:'Wrap the foe in crackling wire.'},
-  {id:'ltn_spear',    el:'lightning', lvl:22, name:"Heaven's Spear",  icon:'⚡', cp:34, cd:6, power:3.0, desc:'One spear of pure thunder.'},
+  {id:'ltn_needle',   el:'lightning', lvl:10, name:'Thunder Needle',  icon:'📍', cp:18, cd:3, power:2.0, apply:[{s:'slow',dur:2}], desc:'A bolt that numbs on impact.'},
+  {id:'ltn_coil',     el:'lightning', lvl:15, name:'Paralysis Coil',  icon:'🌩️', cp:22, cd:5, power:1.4, apply:[{s:'stun',dur:1}], desc:'Wrap the foe in crackling wire.'},
+  {id:'ltn_spear',    el:'lightning', lvl:22, name:"Heaven's Spear",  icon:'⚡', cp:34, cd:6, power:4.0, desc:'One spear of pure thunder.'},
   // EARTH
-  {id:'earth_pebble', el:'earth', lvl:1,  name:'Pebble Barrage',   icon:'🪨', cp:8,  cd:1, power:0.48, hits:3, desc:'Flick a volley of hardened stones.'},
+  {id:'earth_pebble', el:'earth', lvl:1,  name:'Pebble Barrage',   icon:'🪨', cp:8,  cd:1, power:0.58, hits:3, desc:'Flick a volley of hardened stones.'},
   {id:'earth_skin',   el:'earth', lvl:3,  name:'Stone Skin',       icon:'🛡️', cp:10, cd:4, target:'self', apply:[{s:'guard',dur:3}], desc:'Harden your body like granite.'},
-  {id:'earth_quake',  el:'earth', lvl:6,  name:'Quake Stomp',      icon:'🦶', cp:16, cd:3, power:0.9, target:'allEnemies', apply:[{s:'slow',dur:2,chance:0.5}], desc:'Shake the ground under every foe.'},
-  {id:'earth_root',   el:'earth', lvl:10, name:'Iron Root',        icon:'🌳', cp:18, cd:5, target:'self', heal:0.2, apply:[{s:'guard',dur:2}], desc:'Draw strength up from the earth.'},
-  {id:'earth_boulder',el:'earth', lvl:15, name:'Boulder Crush',    icon:'🗿', cp:22, cd:3, power:1.9, apply:[{s:'stun',dur:1,chance:0.3}], desc:'Heave a boulder onto the foe.'},
-  {id:'earth_wrath',  el:'earth', lvl:22, name:"Mountain's Wrath", icon:'🏔️', cp:32, cd:5, power:2.4, apply:[{s:'expose',dur:2},{s:'guard',dur:2,on:'self'}], desc:'The mountain rises to crush and shelter.'},
+  {id:'earth_quake',  el:'earth', lvl:6,  name:'Quake Stomp',      icon:'🦶', cp:16, cd:3, power:1.25, target:'allEnemies', apply:[{s:'slow',dur:2,chance:0.5}], desc:'Shake the ground under every foe.'},
+  {id:'earth_root',   el:'earth', lvl:10, name:'Iron Root',        icon:'🌳', cp:18, cd:5, target:'self', heal:0.24, apply:[{s:'guard',dur:2}], desc:'Draw strength up from the earth.'},
+  {id:'earth_boulder',el:'earth', lvl:15, name:'Boulder Crush',    icon:'🗿', cp:22, cd:3, power:2.5, apply:[{s:'stun',dur:1,chance:0.3}], desc:'Heave a boulder onto the foe.'},
+  {id:'earth_wrath',  el:'earth', lvl:22, name:"Mountain's Wrath", icon:'🏔️', cp:32, cd:5, power:3.2, apply:[{s:'expose',dur:2},{s:'guard',dur:2,on:'self'}], desc:'The mountain rises to crush and shelter.'},
   // WATER
-  {id:'water_whip',     el:'water', lvl:1,  name:'Tide Whip',       icon:'🌊', cp:8,  cd:1, power:1.25, apply:[{s:'slow',dur:2,chance:0.2}], desc:'Lash out with a rope of water.'},
-  {id:'water_mend',     el:'water', lvl:3,  name:'Mist Mend',       icon:'🌫️', cp:12, cd:4, target:'self', heal:0.28, desc:'Cool mist that closes wounds.'},
-  {id:'water_undertow', el:'water', lvl:6,  name:'Undertow',        icon:'🫗', cp:14, cd:3, power:1.0, apply:[{s:'slow',dur:2},{s:'weaken',dur:2}], desc:'Drag the foe down and sap their strength.'},
-  {id:'water_needles',  el:'water', lvl:10, name:'Rain of Needles', icon:'🌧️', cp:20, cd:3, power:0.95, target:'allEnemies', apply:[{s:'bleed',dur:2,pow:0.2}], desc:'Raindrops frozen into needles.'},
-  {id:'water_well',     el:'water', lvl:15, name:'Wellspring',      icon:'⛲', cp:0,  cd:5, target:'self', cpRestore:0.35, cleanse:true, apply:[{s:'regen',dur:3,pow:0.07}], desc:'Cleanse, restore Chakra and regenerate.'},
-  {id:'water_leviathan',el:'water', lvl:22, name:'Leviathan Surge', icon:'🐉', cp:32, cd:5, power:2.5, apply:[{s:'weaken',dur:2}], desc:'A serpent of seawater crashes down.'},
+  {id:'water_whip',     el:'water', lvl:1,  name:'Tide Whip',       icon:'🌊', cp:8,  cd:1, power:1.5, apply:[{s:'slow',dur:2,chance:0.2}], desc:'Lash out with a rope of water.'},
+  {id:'water_mend',     el:'water', lvl:3,  name:'Mist Mend',       icon:'🌫️', cp:12, cd:4, target:'self', heal:0.3, desc:'Cool mist that closes wounds.'},
+  {id:'water_undertow', el:'water', lvl:6,  name:'Undertow',        icon:'🫗', cp:14, cd:3, power:1.45, apply:[{s:'slow',dur:2},{s:'weaken',dur:2}], desc:'Drag the foe down and sap their strength.'},
+  {id:'water_needles',  el:'water', lvl:10, name:'Rain of Needles', icon:'🌧️', cp:20, cd:3, power:1.2, target:'allEnemies', apply:[{s:'bleed',dur:2,pow:0.2}], desc:'Raindrops frozen into needles.'},
+  {id:'water_well',     el:'water', lvl:15, name:'Wellspring',      icon:'⛲', cp:0,  cd:5, target:'self', cpRestore:0.4, cleanse:true, apply:[{s:'regen',dur:3,pow:0.07}], desc:'Cleanse, restore Chakra and regenerate.'},
+  {id:'water_leviathan',el:'water', lvl:22, name:'Leviathan Surge', icon:'🐉', cp:32, cd:5, power:3.3, apply:[{s:'weaken',dur:2}], desc:'A serpent of seawater crashes down.'},
   // ULTIMATES (tier 7)
-  {id:'fire_phoenix',   el:'fire',      lvl:35, name:'Vermilion Phoenix', icon:'🦅', cp:40, cd:6, power:3.2, apply:[{s:'burn',dur:3,pow:0.6}], desc:'A burning phoenix dives through the foe.'},
-  {id:'wind_eye',       el:'wind',      lvl:35, name:'Eye of the Gale',   icon:'👁️', cp:38, cd:6, power:0.75, hits:4, apply:[{s:'haste',dur:2,on:'self'}], desc:'Four strikes from the calm center of a storm.'},
-  {id:'ltn_sovereign',  el:'lightning', lvl:35, name:'Storm Sovereign',   icon:'👑', cp:42, cd:6, power:1.6, target:'allEnemies', apply:[{s:'stun',dur:1,chance:0.35}], desc:'Crown the battlefield in lightning.'},
-  {id:'earth_colossus', el:'earth',     lvl:35, name:'Worldroot Colossus',icon:'🗻', cp:40, cd:6, power:2.4, heal:0.15, apply:[{s:'guard',dur:3,on:'self'}], desc:'Become the mountain: strike, mend and endure.'},
-  {id:'water_tsunami',  el:'water',     lvl:35, name:'Moonlit Tsunami',   icon:'🌕', cp:42, cd:6, power:1.7, target:'allEnemies', apply:[{s:'weaken',dur:2},{s:'slow',dur:2}], desc:'The tide rises under a full moon.'},
+  {id:'fire_phoenix',   el:'fire',      lvl:35, name:'Vermilion Phoenix', icon:'🦅', cp:40, cd:6, power:4.6, apply:[{s:'burn',dur:3,pow:0.6}], desc:'A burning phoenix dives through the foe.'},
+  {id:'wind_eye',       el:'wind',      lvl:35, name:'Eye of the Gale',   icon:'👁️', cp:38, cd:6, power:1.05, hits:4, apply:[{s:'haste',dur:2,on:'self'}], desc:'Four strikes from the calm center of a storm.'},
+  {id:'ltn_sovereign',  el:'lightning', lvl:35, name:'Storm Sovereign',   icon:'👑', cp:42, cd:6, power:2.2, target:'allEnemies', apply:[{s:'stun',dur:1,chance:0.35}], desc:'Crown the battlefield in lightning.'},
+  {id:'earth_colossus', el:'earth',     lvl:35, name:'Worldroot Colossus',icon:'🗻', cp:40, cd:6, power:3.4, heal:0.15, apply:[{s:'guard',dur:3,on:'self'}], desc:'Become the mountain: strike, mend and endure.'},
+  {id:'water_tsunami',  el:'water',     lvl:35, name:'Moonlit Tsunami',   icon:'🌕', cp:42, cd:6, power:2.2, target:'allEnemies', apply:[{s:'weaken',dur:2},{s:'slow',dur:2}], desc:'The tide rises under a full moon.'},
+  // TAIJUTSU: body arts. No element, cheap, fast, many hits. Anyone can learn them.
+  {id:'tai_heel',    type:'taijutsu', el:null, lvl:1,  name:'Crescent Heel',     icon:'🦵', cp:7,  cd:1, power:1.35, critBonus:15, price:50, desc:'A quick axe-kick that finds the weak spot.'},
+  {id:'tai_flurry',  type:'taijutsu', el:null, lvl:5,  name:'Petal Flurry',      icon:'🌸', cp:11, cd:2, power:0.5, hits:4, price:140, desc:'Four lightning-fast strikes like falling petals.'},
+  {id:'tai_throw',   type:'taijutsu', el:null, lvl:10, name:'Stillwater Throw',  icon:'🤼', cp:15, cd:3, power:1.75, apply:[{s:'stun',dur:1,chance:0.4}], price:300, desc:'Flip the foe onto the ground. Often stuns.'},
+  {id:'tai_stance',  type:'taijutsu', el:null, lvl:12, name:'Heron Stance',      icon:'🪽', cp:12, cd:4, target:'self', apply:[{s:'focus',dur:3},{s:'evasion',dur:3}], price:340, desc:'Stand like a heron: sharper strikes, harder to hit.'},
+  {id:'tai_breaker', type:'taijutsu', el:null, lvl:15, name:'Bamboo Breaker',    icon:'🎋', cp:22, cd:3, power:2.2, pierce:true, apply:[{s:'expose',dur:2}], price:520, desc:'A snapping blow that ignores Guard and leaves the foe open.'},
+  {id:'tai_rush',    type:'taijutsu', el:null, lvl:25, name:'Hundred-Step Rush', icon:'💫', cp:32, cd:5, power:0.6, hits:5, apply:[{s:'haste',dur:2,on:'self'}], price:1100, desc:'A blur of steps and strikes that leaves you quicker.'},
+  {id:'tai_combo',   type:'taijutsu', el:null, lvl:40, name:'Thousand-Moon Combo', icon:'🌙', cp:46, cd:7, power:0.65, hits:7, critBonus:20, price:2400, desc:'Seven crescent strikes in the span of one breath.'},
+  // GENJUTSU: illusions. They barely hurt; they decide fights.
+  {id:'gen_haze',    type:'genjutsu', el:null, lvl:6,  name:'Lantern Haze',      icon:'🏮', cp:12, cd:3, power:1.15, apply:[{s:'blind',dur:3,chance:0.9}], price:200, desc:'A drifting glow that blinds the foe. Their attacks miss more.'},
+  {id:'gen_lull',    type:'genjutsu', el:null, lvl:10, name:'Moth-Wing Lullaby', icon:'🦋', cp:16, cd:6, apply:[{s:'sleep',dur:2,chance:0.65}], price:360, desc:'A soft song that puts one foe to sleep until they are hit.'},
+  {id:'gen_dread',   type:'genjutsu', el:null, lvl:16, name:'Whisper of Dread',  icon:'👁️', cp:18, cd:4, power:1.6, apply:[{s:'silence',dur:1,chance:0.65},{s:'weaken',dur:1}], price:560, desc:'A terrible whisper: no techniques, weaker blows.'},
+  {id:'gen_maze',    type:'genjutsu', el:null, lvl:20, name:'Mirror-Moon Maze',  icon:'🪞', cp:24, cd:5, power:1.3, target:'allEnemies', apply:[{s:'confuse',dur:2,chance:0.5}], price:800, desc:'Every foe sees friends as enemies. They hit each other.'},
+  {id:'gen_hollow',  type:'genjutsu', el:null, lvl:28, name:'Hollow Reflection', icon:'👥', cp:24, cd:5, power:2.0, cleanse:true, apply:[{s:'evasion',dur:3,on:'self'},{s:'focus',dur:3,on:'self'}], price:1200, desc:'Strike from a false self: cleanse, slip away and sharpen your aim.'},
+  {id:'gen_eclipse', type:'genjutsu', el:null, lvl:40, name:'Eclipse Dreamfall', icon:'🌘', cp:38, cd:6, power:3.0, target:'allEnemies', apply:[{s:'sleep',dur:2,chance:0.55},{s:'blind',dur:3}], price:2400, desc:'The moon goes dark and every foe drifts into a dream.'},
+  // KINJUTSU: forbidden arts. Each one costs health.
+  {id:'kin_pact',    type:'kinjutsu', el:null, lvl:15, name:'Blood Moon Pact',    icon:'🌑', cp:10, cd:5, target:'self', hpCost:0.15, apply:[{s:'frenzy',dur:3},{s:'haste',dur:2}], price:700, desc:'Pay in blood for a frenzy of speed and power.'},
+  {id:'kin_siphon',  type:'kinjutsu', el:null, lvl:20, name:'Soul-Thread Siphon', icon:'🧵', cp:16, cd:4, power:2.6, hpCost:0.10, leech:0.5, price:1000, desc:'Tear at the foe and steal half of the damage as health.'},
+  {id:'kin_curse',   type:'kinjutsu', el:null, lvl:28, name:'Ninefold Curse',     icon:'🔮', cp:22, cd:5, power:1.9, hpCost:0.12, apply:[{s:'bleed',dur:4,pow:0.35},{s:'weaken',dur:3},{s:'expose',dur:3}], price:1500, desc:'Nine unseen cuts, a withering and an open guard.'},
+  {id:'kin_seal',    type:'kinjutsu', el:null, lvl:36, name:'Seal of the Black Moon', icon:'⚫', cp:28, cd:6, power:5.6, hpCost:0.20, apply:[{s:'weaken',dur:2,on:'self'}], price:2200, desc:'One devastating strike. You are left weakened.'},
+  {id:'kin_requiem', type:'kinjutsu', el:null, lvl:48, name:'Requiem of Ash',     icon:'⚰️', cp:40, cd:7, power:3.6, target:'allEnemies', hpCost:0.25, leech:0.3, apply:[{s:'burn',dur:3,pow:0.5}], price:3800, desc:'A funeral song for everyone in front of you.'},
   // PET-ONLY (target 'ally' = the most wounded ally)
   {id:'pet_ember_bite', el:'fire',      lvl:1, petOnly:true, name:'Ember Bite',   icon:'🦊', cp:6, cd:2, power:1.1, apply:[{s:'burn',dur:2,pow:0.3}], desc:'A bite with smoldering fangs.'},
   {id:'pet_dive',       el:'wind',      lvl:1, petOnly:true, name:'Talon Dive',   icon:'🪶', cp:6, cd:2, power:0.7, hits:2, desc:'Two diving strikes.'},
@@ -634,7 +728,7 @@ const SKILLS = [
   {id:'en_venom', el:'water', lvl:1, enemyOnly:true, name:'Venom Fang', icon:'🐍', cp:8,  cd:2, power:1.0, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A poisoned bite.'},
   {id:'en_gust',  el:'wind',  lvl:1, enemyOnly:true, name:'Wing Gust',  icon:'🪶', cp:10, cd:3, power:0.7, apply:[{s:'slow',dur:2}], desc:'A buffeting blast of wings.'},
 ];
-SKILLS.forEach(s => { s.target = s.target || 'enemy'; s.hits = s.hits || 1; if(s.price == null) s.price = TIER_PRICE[s.lvl] || 100; });
+SKILLS.forEach(s => { s.type = s.type || 'ninjutsu'; s.target = s.target || 'enemy'; s.hits = s.hits || 1; if(s.price == null) s.price = TIER_PRICE[s.lvl] || 100; });
 const SKILL = Object.fromEntries(SKILLS.map(s => [s.id, s]));
 
 /* ENEMIES — stats come from enemyStats(level) × role multipliers (hpM, atkM, agiM, xpM, goldM).
@@ -853,6 +947,33 @@ function clanPerkText(cl, tier){
   return t.join(', ');
 }
 
+/* TALENTS — one pick per tier, unlocked by level. Each talent adds its `fx` to the ninja:
+   hpPct cpPct agiPct atkPct (stats), crit, dodge, dmg (all damage), dmgType {family: share}, cpCut (cheaper techniques),
+   cdCut (long cooldowns shorter), cpRegen / hpRegen (per turn), lifesteal, execute (vs foes under 30% HP), lastStand (under 35% HP),
+   critDmg, statusChance + genDur (illusions), hpCostCut (forbidden arts), opening [[status, turns]] and undying (survive one lethal blow). */
+const TALENT_TIERS = [5, 12, 20, 30, 40, 50];
+const TALENTS = [
+  {id:'hardy',   tier:0, icon:'🛡️', name:'Hardy Spirit',        desc:'+10% max HP.', fx:{hpPct:.10}},
+  {id:'deep',    tier:0, icon:'💧', name:'Deep Well',           desc:'+12% Chakra and 2% more Chakra back every turn.', fx:{cpPct:.12, cpRegen:.02}},
+  {id:'eyes',    tier:0, icon:'👁️', name:'Sharp Eyes',          desc:'+5% crit chance and +5% Power.', fx:{crit:5, atkPct:.05}},
+  {id:'thrifty', tier:1, icon:'🍃', name:'Thrifty Chakra',      desc:'Techniques cost 15% less Chakra.', fx:{cpCut:.15}},
+  {id:'brisk',   tier:1, icon:'⏱️', name:'Brisk Recovery',      desc:'Techniques with a cooldown of 2 or more recover 1 turn sooner.', fx:{cdCut:1}},
+  {id:'reflex',  tier:1, icon:'💨', name:'Moonlit Reflexes',    desc:'+10% Agility and +4% dodge.', fx:{agiPct:.10, dodge:4}},
+  {id:'fist',    tier:2, icon:'🥋', name:'Way of the Fist',     desc:'Taijutsu deals +22% damage. +3% crit.', fx:{dmgType:{taijutsu:.22}, crit:3}},
+  {id:'veil',    tier:2, icon:'🌀', name:'Way of Illusion',     desc:'Genjutsu lands 20% more often and lasts 1 turn longer.', fx:{statusChance:.20, genDur:1}},
+  {id:'elems',   tier:2, icon:'🔥', name:'Way of the Elements', desc:'Ninjutsu deals +15% damage.', fx:{dmgType:{ninjutsu:.15}}},
+  {id:'forbid',  tier:3, icon:'☠️', name:'Forbidden Scholar',   desc:'Kinjutsu deals +25% damage and costs 30% less health.', fx:{dmgType:{kinjutsu:.25}, hpCostCut:.30}},
+  {id:'thirst',  tier:3, icon:'🩸', name:'Moon-Thirst',         desc:'Heal for 8% of all the damage you deal.', fx:{lifesteal:.08}},
+  {id:'ember',   tier:3, icon:'🕯️', name:'Ember of Resolve',    desc:'Below 35% HP, deal +30% damage.', fx:{lastStand:.30}},
+  {id:'gambit',  tier:4, icon:'🌬️', name:'Opening Gambit',      desc:'Start every battle with Haste and Empower for 2 turns.', fx:{opening:[['haste',2],['empower',2]]}},
+  {id:'exec',    tier:4, icon:'🎯', name:'Executioner',         desc:'+35% damage to foes below 30% HP.', fx:{execute:.35}},
+  {id:'stoic',   tier:4, icon:'⛩️', name:'Stoic Guardian',      desc:'Start battles with Guard for 3 turns, and heal 3% HP every turn.', fx:{opening:[['guard',3]], hpRegen:.03}},
+  {id:'second',  tier:5, icon:'🌙', name:'Second Wind',         desc:'Once per battle, a lethal blow leaves you at 1 HP, then you heal 30%.', fx:{undying:1}},
+  {id:'master',  tier:5, icon:'📜', name:'Master of All Arts',  desc:'All attacks deal +15% damage and techniques cost 10% less Chakra.', fx:{dmg:.15, cpCut:.10}},
+  {id:'bless',   tier:5, icon:'🌕', name:"Moon's Blessing",     desc:'+8% HP, Chakra, Agility and Power, and +5% crit.', fx:{hpPct:.08, cpPct:.08, agiPct:.08, atkPct:.08, crit:5}},
+];
+const TALENT = Object.fromEntries(TALENTS.map(t => [t.id, t]));
+
 /* ECHO ARENA — AI ghosts of other builds */
 const ARENA_TIERS = [{r:0,name:'Pebble Echo'},{r:1100,name:'Reed Echo'},{r:1250,name:'Lantern Echo'},{r:1450,name:'Crescent Echo'},{r:1700,name:'Eclipse Echo'}];
 const arenaTier = r => { let t = ARENA_TIERS[0]; ARENA_TIERS.forEach(x => { if(r >= x.r) t = x; }); return t; };
@@ -880,7 +1001,7 @@ const HAIR_COLORS   = ['#2b2b3a','#5a3a22','#c98a3a','#e8d27a','#d8d8e4','#c43d4
 const OUTFIT_COLORS = ['#3a5a8c','#c9612e','#3d7a4f','#6b4a8c','#2c2c38','#b8363a','#d9a22b','#4c8c99'];
 const EYE_COLORS    = ['#3b6fd6','#6b4226','#3f9a5a','#8a3fbf','#c43d2b','#2b2b2b'];
 const SKIN_TONES    = ['#fbe0c8','#f3d2b3','#e0b48e','#c68b5e','#8d5a3b'];
-const HAIR_STYLES   = [{id:'spiky',name:'Spiky'},{id:'short',name:'Tidy'},{id:'ponytail',name:'Ponytail'},{id:'long',name:'Long'}];
+const HAIR_STYLES   = [{id:'spiky',name:'Spiky'},{id:'short',name:'Tidy'},{id:'ponytail',name:'Ponytail'},{id:'long',name:'Long'},{id:'bun',name:'Top bun'},{id:'bob',name:'Bob'},{id:'twin',name:'Twin tails'},{id:'braid',name:'Braid'}];
 
 /* ============================ UTIL ============================ */
 const $ = s => document.querySelector(s);
@@ -908,19 +1029,24 @@ function eyeSVG(cx, cy, c, f){
   ${f?`<path d="M${cx+5.2} ${cy-6} l3 -2.4" stroke="#1d1a22" stroke-width="1.6" stroke-linecap="round"/>`:''}`;
 }
 function hairBack(st, c){
+  if(st === 'bob') return `<path d="M31 36 Q21 62 29 82 Q41 86 47 72 L47 40Z" fill="${c}"/><path d="M89 36 Q99 62 91 82 Q79 86 73 72 L73 40Z" fill="${c}"/>`;
+  if(st === 'twin') return `<path d="M35 34 Q6 40 11 90 Q21 75 26 66 Q27 81 34 86 Q30 58 41 46Z" fill="${c}"/><path d="M85 34 Q114 40 109 90 Q99 75 94 66 Q93 81 86 86 Q90 58 79 46Z" fill="${c}"/><circle cx="35" cy="36" r="4" fill="#c43d4b"/><circle cx="85" cy="36" r="4" fill="#c43d4b"/>`;
+  if(st === 'braid') return `<path d="M36 34 Q13 50 19 78 Q23 94 29 108 Q41 98 38 82 Q34 62 45 46Z" fill="${c}"/><path d="M21 68 l11 4 M23 80 l11 4 M26 92 l11 4" stroke="${shade(c, -.28)}" stroke-width="2.2" fill="none" stroke-linecap="round"/><circle cx="35" cy="38" r="4" fill="#c43d4b"/>`;
   if(st === 'ponytail') return `<path d="M36 30 Q6 34 12 86 Q20 66 24 60 Q26 74 31 78 Q30 56 39 44Z" fill="${c}"/><circle cx="36" cy="37" r="4.5" fill="#c43d4b"/>`;
   if(st === 'long') return `<path d="M34 28 Q14 62 22 108 Q34 100 44 106 Q42 82 56 64 L60 28Z" fill="${c}"/>`;
   return '';
 }
 function hairCap(st, c){
+  if(st === 'bun') return `<circle cx="60" cy="13" r="11.5" fill="${c}"/><path d="M31 49 Q27 19 60 18 Q93 19 89 49 Q86 34 60 32 Q34 34 31 49Z" fill="${c}"/><path d="M52 13 Q60 9 68 13" stroke="${shade(c, .25)}" stroke-width="1.6" fill="none" stroke-linecap="round"/>`;
   if(st === 'spiky') return `<path d="M30 47 L23 30 L36 32 L33 13 L48 24 L54 3 L64 20 L77 5 L78 24 L93 16 L88 32 L97 40 L90 47 Q60 22 30 47Z" fill="${c}"/>`;
   return `<path d="M31 49 Q27 19 60 18 Q93 19 89 49 Q86 34 60 32 Q34 34 31 49Z" fill="${c}"/>`;
 }
 function hairBangs(st, c){
   const side = `<path d="M32 44 Q29 58 35 63 L38 46Z" fill="${c}"/>`;
   if(st === 'spiky') return side + `<path d="M37 44 L41 55 L47 45 L53 57 L59 45 L65 55 L71 45 L78 53 L85 44Z" fill="${c}"/>`;
-  if(st === 'short') return side + `<path d="M35 44 Q52 43 67 57 Q66 48 87 44Z" fill="${c}"/>`;
-  if(st === 'ponytail') return side + `<path d="M37 44 L44 54 L52 45 L60 53 L68 45 L76 52 L85 44Z" fill="${c}"/>`;
+  if(st === 'bob') return side + `<path d="M33 45 Q60 35 87 45 L89 57 Q60 49 31 57Z" fill="${c}"/>`;
+  if(st === 'short' || st === 'bun' || st === 'braid') return side + `<path d="M35 44 Q52 43 67 57 Q66 48 87 44Z" fill="${c}"/>`;
+  if(st === 'ponytail' || st === 'twin') return side + `<path d="M37 44 L44 54 L52 45 L60 53 L68 45 L76 52 L85 44Z" fill="${c}"/>`;
   return `<path d="M33 44 Q39 60 35 74 Q46 62 48 46 L73 46 Q74 60 85 71 Q80 56 87 44Z" fill="${c}"/>`;
 }
 function backSVG(b){
@@ -1216,7 +1342,7 @@ function newCharacter(cr){
     look:{gender:cr.gender, hairStyle:cr.hairStyle, hair:cr.hair, outfit:cr.outfit, eyes:cr.eyes, skin:cr.skin},
     level:1, xp:0, gold:120, points:0, alloc:{hp:0, cp:0, agi:0},
     equip:{weapon:'kunai_train', clothing:null, back:null, accessory:null},
-    skills:[first], loadout:[first], pets:[], pet:null, bond:{}, clan:null};
+    skills:[first], loadout:[first], pets:[], pet:null, bond:{}, clan:null, talents:blankTalents(), petAuto:true};
 }
 /* ---- Save slots ----
    Each ninja lives in its own slot. The index lists them for the title and Save screens; the first
@@ -1278,6 +1404,8 @@ function normChar(o){
   c.loadout = (c.loadout || []).filter(id => c.skills.includes(id)).slice(0, MAX_LOADOUT);
   c.pets = (c.pets || []).filter(id => PET[id]);
   if(c.pet && !c.pets.includes(c.pet)) c.pet = null;
+  c.petAuto = o.petAuto !== false; c.auto = !!o.auto;
+  c.talents = blankTalents().map((_, i) => { const id = (o.talents || [])[i]; return TALENT[id] && TALENT[id].tier === i ? id : null; });
   c.bond = Object.assign({}, o.bond || {});
   if(c.clan && !CLAN[c.clan.id]) c.clan = null;
   c.squad = Array.isArray(o.squad) ? o.squad.slice(0, MAX_SQUAD).map(x => Object.assign(normChar(Object.assign({}, x, {squad:[]})), {squad:[]})) : [];
@@ -1305,7 +1433,7 @@ function migrate(o){
   s.squad.active = (s.squad.active || []).filter(id => s.squad.roster.some(r => r.id === id)).slice(0, MAX_SQUAD);
   s.squad.pool = (s.squad.pool || []).map(r => Object.assign(normChar(r), {squad:[]}));
   s.squad.roster.forEach(r => { r.autoTech = r.autoTech !== false; learnNewTechs(r); }); // older saves: catch recruits up on techniques they've outgrown
-  s.version = 4;
+  s.version = 5;
   return s;
 }
 function addInv(id, n){ S.inventory[id] = (S.inventory[id] || 0) + n; if(S.inventory[id] <= 0) delete S.inventory[id]; }
@@ -1333,15 +1461,33 @@ function gearBonus(c){
   return g;
 }
 function charStats(c){
-  const g = gearBonus(c), cb = clanBonus(c);
-  const agi = Math.round((5 + c.level + c.alloc.agi * 2 + g.agi) * (1 + (cb.agiPct || 0)));
-  return {maxHp:Math.round((90 + c.level * 12 + c.alloc.hp * 10 + g.hp) * (1 + (cb.hpPct || 0))),
-          maxCp:Math.round((40 + c.level * 5 + c.alloc.cp * 6 + g.cp) * (1 + (cb.cpPct || 0))),
-          agi, atk:Math.round((8 + c.level * 2 + g.atk) * (1 + (cb.atkPct || 0))),
-          crit:Math.min(50, 5 + agi * 0.15 + g.crit + (cb.crit || 0)), dodge:g.dodge + (cb.dodge || 0),
-          elem:cb.elem || null, elemPct:cb.elemPct || 0, g};
+  const g = gearBonus(c), cb = clanBonus(c), tb = talentBonus(c), P = k => 1 + (cb[k] || 0) + (tb[k] || 0);
+  const agi = Math.round((5 + c.level + c.alloc.agi * 2 + g.agi) * P('agiPct'));
+  return {maxHp:Math.round((90 + c.level * 12 + c.alloc.hp * 10 + g.hp) * P('hpPct')),
+          maxCp:Math.round((40 + c.level * 5 + c.alloc.cp * 6 + g.cp) * P('cpPct')),
+          agi, atk:Math.round((8 + c.level * 2 + g.atk) * P('atkPct')),
+          crit:Math.min(50, 5 + agi * 0.15 + g.crit + (cb.crit || 0) + (tb.crit || 0)), dodge:g.dodge + (cb.dodge || 0) + (tb.dodge || 0),
+          elem:cb.elem || null, elemPct:cb.elemPct || 0, g, tb};
 }
-function skillPrice(s){ return s.el === S.char.element ? s.price : s.price * 2; }
+// Talents: one pick per tier (see TALENTS). Everything they grant is summed into one bag.
+const blankTalents = () => TALENT_TIERS.map(() => null);
+function talentBonus(c){
+  const o = {dmgType:{}, opening:[]}, lv = c.level || 1;
+  (c.talents || []).forEach((id, i) => {
+    const t = TALENT[id]; if(!t || t.tier !== i || lv < TALENT_TIERS[i]) return;
+    for(const k in t.fx){
+      const v = t.fx[k];
+      if(k === 'dmgType') for(const ty in v) o.dmgType[ty] = (o.dmgType[ty] || 0) + v[ty];
+      else if(k === 'opening') o.opening.push(...v);
+      else o[k] = (o[k] || 0) + v;
+    }
+  });
+  return o;
+}
+const tv = (u, k) => (u.t && u.t[k]) || 0;
+// Off-element ninjutsu costs double; the other technique families are element-free, so they cost the same for everyone.
+function skillPrice(s, c){ c = c || S.char; return s.type === 'ninjutsu' && s.el !== c.element ? s.price * 2 : s.price; }
+const skillColor = s => s.el ? ELEMENTS[s.el].color : TECH_TYPES[s.type || 'ninjutsu'].color;
 function skillTags(s){
   const t = [];
   if(s.power) t.push(`${s.hits > 1 ? s.hits + '×' : ''}${Math.round(s.power * 100)}% power`);
@@ -1351,7 +1497,10 @@ function skillTags(s){
   if(s.cpRestore) t.push(`+${Math.round(s.cpRestore * 100)}% CP`);
   if(s.cleanse) t.push('Cleanse');
   if(s.critBonus) t.push(`+${s.critBonus}% crit`);
-  (s.apply || []).forEach(a => { const st = STATUSES[a.s]; t.push(`${st.icon} ${st.name}${a.chance < 1 ? ' ' + Math.round(a.chance * 100) + '%' : ''}${a.on === 'self' ? ' (self)' : ''}`); });
+  if(s.pierce) t.push('Ignores Guard');
+  if(s.leech) t.push(`Steals ${Math.round(s.leech * 100)}%`);
+  if(s.hpCost) t.push(`☠️ −${Math.round(s.hpCost * 100)}% HP`);
+  (s.apply || []).forEach(a => { const st = STATUSES[a.s]; t.push(`${st.icon} ${st.name}${a.chance < 1 ? ' ' + Math.round(a.chance * 100) + '%' : ''}${a.on === 'self' || (s.target === 'self') ? ' (self)' : ''}`); });
   return t;
 }
 function missionXp(m){ return m.xp != null ? m.xp : Math.round(xpToNext(m.lvl) * 0.3); }
@@ -1364,9 +1513,15 @@ function unitFromChar(c, controller = 'player', side = 'ally'){
   const st = charStats(c);
   return mkUnit({name:c.name, side, controller, isPlayer:controller === 'player', el:c.element, level:c.level,
     maxHp:st.maxHp, maxCp:st.maxCp, agi:st.agi, atk:st.atk, crit:st.crit, dodge:st.dodge, elemBoost:st.elem, elemPct:st.elemPct,
-    skills:[...c.loadout], kind:'ninja', look:Object.assign({}, c.look, {scarf:ELEMENTS[c.element].color}), gear:gearLooks(c)});
+    skills:[...c.loadout], kind:'ninja', look:Object.assign({}, c.look, {scarf:ELEMENTS[c.element].color}), gear:gearLooks(c), t:st.tb});
 }
-function enemyStats(L){ return {hp:48 + 15 * L + 0.12 * L * L, atk:5 + 1.9 * L + 0.012 * L * L, agi:4 + 0.9 * L, cp:30 + 4 * L}; }
+// Foes are tuned against the technique rules above (stronger techniques, free Chakra regen, Charge guards): ENEMY_HP/ENEMY_ATK keep
+// fights the same length as before. They ramp in over the first ten levels so a brand-new ninja with one technique isn't punished.
+const ENEMY_HP = 1.3, ENEMY_ATK = 1.1;
+function enemyStats(L){
+  const k = clamp((L - 1) / 9, 0, 1), hm = 1 + (ENEMY_HP - 1) * k, am = 1 + (ENEMY_ATK - 1) * k;
+  return {hp:(48 + 15 * L + 0.12 * L * L) * hm, atk:(5 + 1.9 * L + 0.012 * L * L) * am, agi:4 + 0.9 * L, cp:30 + 4 * L};
+}
 function unitFromEnemy(id, lvl){
   const d = ENEMY[id], b = enemyStats(lvl);
   return mkUnit({name:d.name, side:'enemy', controller:'ai', el:d.el, level:lvl,
@@ -1378,7 +1533,7 @@ function unitFromEnemy(id, lvl){
 // Pets fight on their owner's side under AI control; stats scale from the owner and bond level.
 function unitFromPet(pid, ownerStats, side, bond, level){
   const p = PET[pid], m = 1 + 0.06 * (bondLevel(bond) - 1);
-  return mkUnit({name:p.name, side, controller:'ai', isPet:true, el:p.el, level,
+  return mkUnit({name:p.name, side, controller:'ai', isPet:true, petId:pid, el:p.el, level,
     maxHp:Math.round(ownerStats.maxHp * 0.45 * p.hpM * m), maxCp:40 + level * 3, agi:Math.round(ownerStats.agi * 0.9 * p.agiM),
     atk:Math.round(ownerStats.atk * 0.55 * p.atkM * m * 10) / 10, crit:8, dodge:0, skills:[...p.skills], kind:p.kind, look:p.look});
 }
@@ -1386,8 +1541,11 @@ function unitFromPet(pid, ownerStats, side, bond, level){
 function ghostTeam(g){
   const u = unitFromChar(g, 'ai', 'enemy'); u.isGhost = true;
   const team = [u];
-  for(const m of (g.squad || []).slice(0, MAX_SQUAD)){ const su = unitFromChar(Object.assign({}, m, {clan:g.clan}), 'ai', 'enemy'); su.isGhost = true; team.push(su); }
-  if(g.pet && PET[g.pet]) team.push(unitFromPet(g.pet, charStats(g), 'enemy', (g.bond || {})[g.pet] || 0, g.level));
+  const addPet = (ch, owner) => { if(ch.pet && PET[ch.pet]){ const pu = unitFromPet(ch.pet, charStats(ch), 'enemy', (ch.bond || {})[ch.pet] || 0, ch.level); pu.ownerUid = owner.uid; team.push(pu); } };
+  addPet(g, u);
+  for(const m of (g.squad || []).slice(0, MAX_SQUAD)){
+    const mm = Object.assign({}, m, {clan:g.clan}), su = unitFromChar(mm, 'ai', 'enemy'); su.isGhost = true; team.push(su); addPet(mm, su);
+  }
   return team;
 }
 function unitFromGhost(ghostChar){ return ghostTeam(normChar(ghostChar))[0]; }
@@ -1409,18 +1567,21 @@ function makeGhost(level, squadN = 0){
     const opts = ITEMS.filter(i => i.slot === sl && i.lvl <= level && !i.shards).sort((a, b) => b.lvl - a.lvl).slice(0, 2);
     g.equip[sl] = opts.length && Math.random() < 0.9 ? pick(opts).id : null;
   }
-  const own = SKILLS.filter(s => s.el === el && s.lvl <= level && !s.enemyOnly && !s.petOnly).slice(-5);
-  const off = SKILLS.filter(s => s.el !== el && s.lvl <= level && !s.enemyOnly && !s.petOnly);
+  const real = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= level);
+  const own = real.filter(s => s.el === el).slice(-5);
+  const off = real.filter(s => s.el && s.el !== el), free = real.filter(s => !s.el);
   g.skills = own.map(s => s.id); if(off.length && level >= 5) g.skills.push(pick(off).id);
+  if(free.length && level >= 3) for(const s of [...free].sort(() => Math.random() - 0.5).slice(0, 2)) g.skills.push(s.id);
   g.loadout = g.skills.slice(0, MAX_LOADOUT);
   const pets = PETS.filter(p => p.lvl <= level && !p.shards);
   if(pets.length && Math.random() < 0.55){ g.pet = pick(pets).id; g.pets = [g.pet]; g.bond[g.pet] = Math.floor(Math.random() * level); }
   if(level >= 5 && Math.random() < 0.6){ const cl = pick(CLANS.filter(c => c.lvl <= level)); g.clan = {id:cl.id, rep:Math.floor(Math.random() * level * 20)}; }
-  g.squad = Array.from({length:squadN}, () => { const m = makeGhost(Math.max(1, level - Math.floor(Math.random() * 3)), 0); m.pet = null; m.pets = []; m.clan = null; return m; });
+  g.talents = autoTalents(g);
+  g.squad = Array.from({length:squadN}, () => { const m = makeGhost(Math.max(1, level - Math.floor(Math.random() * 3)), 0); m.clan = null; if(!(m.pet && Math.random() < 0.5)){ m.pet = null; m.pets = []; } return m; });
   return normChar(g);
 }
 function soloPower(c){ const s = charStats(c); return Math.round(s.maxHp * 0.25 + s.atk * 3 + s.agi * 2 + s.maxCp * 0.2 + c.loadout.length * 8); }
-function buildPower(c, squad){ const sq = squad || c.squad || []; return soloPower(c) + (c.pet ? 25 : 0) + sq.reduce((a, m) => a + Math.round(soloPower(m) * 0.8), 0); }
+function buildPower(c, squad){ const sq = squad || c.squad || []; return soloPower(c) + (c.pet ? 25 : 0) + sq.reduce((a, m) => a + Math.round(soloPower(m) * 0.8) + (m.pet ? 20 : 0), 0); }
 function refreshArena(){ const L = S.char.level, n = activeSquad().length; S.arena.opps = [-1, 0, 1].map(d => Object.assign(makeGhost(L + d, n), {diff:d})); persist(); }
 
 /* ============================ BATTLE ENGINE ============================ */
@@ -1430,16 +1591,25 @@ const effAgi = u => u.agi * (hasStatus(u, 'slow') ? 0.6 : 1) * (hasStatus(u, 'ha
 const opponents = u => (u.side === 'ally' ? B.enemies : B.allies).filter(x => x.alive);
 const friends = u => (u.side === 'ally' ? B.allies : B.enemies).filter(x => x.alive);
 const allUnits = () => [...B.allies, ...B.enemies];
-function dodgeChance(att, def){ return clamp(5 + (effAgi(def) - effAgi(att)) * 1.2 + (def.dodge || 0) + (hasStatus(def, 'haste') ? 10 : 0), 3, 45); }
+function dodgeChance(att, def){ return clamp(5 + (effAgi(def) - effAgi(att)) * 1.2 + (def.dodge || 0) + (hasStatus(def, 'haste') ? 10 : 0) + (hasStatus(def, 'evasion') ? 25 : 0) + (hasStatus(att, 'blind') ? 30 : 0), 3, 60); }
 function log(msg){ if(!B) return; B.log.push(msg); if(B.log.length > 40) B.log.shift(); }
 const mostWounded = u => friends(u).reduce((a, b) => (a.hp / a.maxHp <= b.hp / b.maxHp ? a : b));
 
-// Your side: leader + active squadmates (you control them too) + pet (AI). Squadmates share the leader's clan perks.
+// Your side: leader + active squadmates (you control them, or the AI does) and each ninja's own pet, which stands behind its owner.
+// Squadmates share the leader's clan perks.
 function playerTeam(carry){
-  const c = S.char, st = charStats(c), p = unitFromChar(c); p.key = 'leader';
-  const team = [p];
-  for(const r of activeSquad()){ const u = unitFromChar(Object.assign({}, r, {clan:c.clan}), 'player', 'ally'); u.isPlayer = false; u.isSquad = true; u.key = r.id; team.push(u); }
-  if(c.pet && PET[c.pet]){ const pu = unitFromPet(c.pet, st, 'ally', c.bond[c.pet] || 0, c.level); pu.key = 'pet'; team.push(pu); }
+  const c = S.char, team = [];
+  const addPet = (ch, owner, key) => {
+    if(!(ch.pet && PET[ch.pet])) return;
+    const pu = unitFromPet(ch.pet, charStats(ch), 'ally', (ch.bond || {})[ch.pet] || 0, ch.level);
+    pu.key = key === 'leader' ? 'pet' : 'pet:' + key; pu.owner = key; pu.ownerUid = owner.uid; pu.controller = ch.petAuto === false ? 'player' : 'ai';
+    team.push(pu);
+  };
+  const p = unitFromChar(c); p.key = 'leader'; team.push(p); addPet(c, p, 'leader');
+  for(const r of activeSquad()){
+    const m = Object.assign({}, r, {clan:c.clan}), u = unitFromChar(m, r.auto ? 'ai' : 'player', 'ally');
+    u.isPlayer = false; u.isSquad = true; u.key = r.id; team.push(u); addPet(m, u, r.id);
+  }
   if(carry) for(const u of team){ const k = carry[u.key]; if(k){ u.hp = clamp(k.hp, 1, u.maxHp); u.cp = clamp(k.cp, 0, u.maxCp); } }
   return team;
 }
@@ -1452,8 +1622,8 @@ function startMission(id){
 function startStage(){
   if(RUN.kind === 'mission'){
     const m = MISSION[RUN.id], st = m.stages[RUN.stage];
-    const foes = st.foes.map(([id, l]) => unitFromEnemy(id, l)), n = activeSquad().length;
-    if(n) foes.forEach(e => { e.maxHp = e.hp = Math.round(e.maxHp * (1 + 0.45 * n)); e.atk = Math.round(e.atk * (1 + 0.12 * n) * 10) / 10; }); // bigger squad, tougher foes
+    const foes = st.foes.map(([id, l]) => unitFromEnemy(id, l)), sq = activeSquad(), n = sq.length, np = sq.filter(r => r.pet && PET[r.pet]).length;
+    if(n) foes.forEach(e => { e.maxHp = e.hp = Math.round(e.maxHp * (1 + 0.45 * n + 0.15 * np)); e.atk = Math.round(e.atk * (1 + 0.12 * n + 0.04 * np) * 10) / 10; }); // bigger squad, tougher foes
     startBattle(playerTeam(RUN.carry), foes, {title:m.name, stage:RUN.stage + 1, stages:m.stages.length, boss:!!st.boss});
   } else if(RUN.kind === 'arena'){
     startBattle(playerTeam(null), ghostTeam(RUN.ghost), {title:`Echo Arena: ${RUN.ghost.name}`, stage:1, stages:1, sub:RUN.ghost.archetype || 'Ghost build'});
@@ -1466,7 +1636,8 @@ function startBattle(allies, enemies, meta){
   UI.screen = 'battle'; UI.itemPanel = false;
   closeModal(); render(); window.scrollTo(0, 0);
   log(`${meta.boss ? '⚠️ Boss battle! ' : ''}${enemies.map(e => `<b>${esc(e.name)}</b>`).join(', ')} ${enemies.length > 1 ? 'appear' : 'appears'}!`);
-  if(allies.find(a => a.isPet)) log(`🐾 ${esc(allies.find(a => a.isPet).name)} fights at your side.`);
+  const pets = allies.filter(a => a.isPet); if(pets.length) log(`🐾 ${pets.map(p => esc(p.name)).join(', ')} ${pets.length > 1 ? 'fight' : 'fights'} at your side.`);
+  for(const u of [...allies, ...enemies]) for(const [st, dur] of (u.t && u.t.opening) || []) applyStatus(u, st, dur, 0, u);
   updateBattle();
   emit('battleStart', B);
   later(beginRound, 700);
@@ -1494,19 +1665,22 @@ function nextTurn(){
   startOfTurn(u);
   updateBattle();
   if(!u.alive){ later(nextTurn, 800); return; }
-  if(hasStatus(u, 'stun')){
-    log(`💫 <b>${esc(u.name)}</b> is stunned and can't move!`); float(u, 'Stunned', 'fl-status fl-debuff');
+  if(hasStatus(u, 'stun') || hasStatus(u, 'sleep')){
+    const asleep = !hasStatus(u, 'stun');
+    log(asleep ? `😴 <b>${esc(u.name)}</b> is fast asleep!` : `💫 <b>${esc(u.name)}</b> is stunned and can't move!`); float(u, asleep ? 'Asleep' : 'Stunned', 'fl-status fl-debuff');
     endOfTurn(u); updateBattle(); later(nextTurn, 950); return;
   }
-  if(u.controller === 'player'){ B.awaiting = true; if(!opponents(u).find(e => e.uid === B.target)) retarget(); updateBattle(); if(S.settings.auto) later(autoAct, 500); else if(u.isSquad) sfx('click'); }
+  if(u.controller === 'player'){ B.awaiting = true; if(!opponents(u).find(e => e.uid === B.target)) retarget(); updateBattle(); if(S.settings.auto) later(autoAct, 500); else if(u.isSquad || u.isPet) sfx('click'); }
   else later(() => { B.fseq = 0; aiAct(u); endOfTurn(u); updateBattle(); later(nextTurn, 850); }, 650);
 }
 function startOfTurn(u){
   u.turns++;
   for(const k in u.cds) if(u.cds[k] > 0) u.cds[k]--;
+  const reg = Math.round(u.maxCp * (CP_REGEN + tv(u, 'cpRegen'))); if(reg > 0) u.cp = Math.min(u.maxCp, u.cp + reg);
+  if(tv(u, 'hpRegen')) heal(u, Math.max(1, Math.round(u.maxHp * tv(u, 'hpRegen'))));
   for(const st of [...u.statuses]){
     if(!u.alive) break;
-    if(st.s === 'burn' || st.s === 'bleed'){ dealDamage(u, st.val, {cls:'fl-' + st.s}); log(`${STATUSES[st.s].icon} ${esc(u.name)} takes ${st.val} ${st.s} damage.`); }
+    if(st.s === 'burn' || st.s === 'bleed'){ dealDamage(u, st.val, {cls:'fl-' + st.s, dot:true}); log(`${STATUSES[st.s].icon} ${esc(u.name)} takes ${st.val} ${st.s} damage.`); }
     else if(st.s === 'regen') heal(u, Math.max(1, Math.round(st.val * u.maxHp)));
   }
 }
@@ -1514,6 +1688,22 @@ function endOfTurn(u){ u.statuses.forEach(x => x.dur--); u.statuses = u.statuses
 function retarget(){ const n = B.enemies.find(e => e.alive); if(n) B.target = n.uid; }
 function getTarget(){ return B.enemies.find(e => e.uid === B.target && e.alive) || B.enemies.find(e => e.alive); }
 
+/* ---- technique rules: cost, cooldown and whether a move can be used right now ---- */
+function skillCost(u, s){ return s.cp ? Math.max(1, Math.round(s.cp * (1 - Math.min(0.5, tv(u, 'cpCut'))))) : 0; }
+function hpCostOf(u, s){ return s.hpCost ? Math.max(1, Math.round(u.maxHp * s.hpCost * (1 - tv(u, 'hpCostCut')))) : 0; }
+const skillCd = (u, s) => s.cd >= 2 ? Math.max(1, s.cd - tv(u, 'cdCut')) : s.cd;
+const canUse = (u, s) => (u.cds[s.id] || 0) <= 0 && u.cp >= skillCost(u, s) && !hasStatus(u, 'silence') && (!s.hpCost || u.hp > hpCostOf(u, s) + 1);
+function whyNot(u, s){
+  if((u.cds[s.id] || 0) > 0) return 'Still on cooldown';
+  if(hasStatus(u, 'silence')) return 'Silenced: no techniques this turn';
+  if(u.cp < skillCost(u, s)) return 'Not enough Chakra. Try Charge.';
+  if(s.hpCost && u.hp <= hpCostOf(u, s) + 1) return 'Too wounded to pay the health cost';
+  return '';
+}
+const chargeGain = u => Math.round(u.maxCp * CHARGE.cp) + CHARGE.flat;
+const BASIC = {id:'basic', type:'basic', el:null, power:BASIC_POWER, hits:1, cp:0, cd:0, target:'enemy', apply:[]};
+
+/* ---- damage ---- */
 function attack(att, def, o){
   let landed = false;
   for(let i = 0; i < (o.hits || 1); i++){
@@ -1524,23 +1714,35 @@ function attack(att, def, o){
     let d = att.atk * o.power * rand(0.9, 1.1);
     const em = elemMult(o.el, def.el); d *= em;
     if(o.el && att.elemBoost === o.el) d *= 1 + att.elemPct;
+    d *= 1 + tv(att, 'dmg') + ((att.t && att.t.dmgType && att.t.dmgType[o.type]) || 0);
     if(hasStatus(att, 'empower')) d *= 1.3;
+    if(hasStatus(att, 'frenzy')) d *= 1.5;
     if(hasStatus(att, 'weaken')) d *= 0.75;
-    if(hasStatus(def, 'guard')) d *= 0.65;
+    if(hasStatus(def, 'guard') && !o.pierce) d *= 0.65;
     if(hasStatus(def, 'expose')) d *= 1.25;
-    const crit = Math.random() * 100 < att.crit + (o.critBonus || 0);
-    if(crit) d *= 1.5;
+    if(hasStatus(def, 'frenzy')) d *= 1.2;
+    if(def.hp < def.maxHp * 0.3) d *= 1 + tv(att, 'execute');
+    if(att.hp < att.maxHp * 0.35) d *= 1 + tv(att, 'lastStand');
+    const crit = Math.random() * 100 < att.crit + (o.critBonus || 0) + (hasStatus(att, 'focus') ? 25 : 0);
+    if(crit) d *= 1.5 + tv(att, 'critDmg');
     d = Math.max(1, Math.round(d));
     dealDamage(def, d, {crit, em});
     if(att.side === 'ally' && att.controller === 'player'){ if(crit) S.counters.crits++; if(em > 1) S.counters.strong++; }
     log(`${esc(att.name)} hits ${esc(def.name)} for <b>${d}</b>${crit ? ' — critical!' : ''}${em > 1 ? ' (strong element)' : em < 1 ? ' (weak element)' : ''}`);
+    const back = (hasStatus(att, 'vamp') ? 0.35 : 0) + tv(att, 'lifesteal') + (o.leech || 0);
+    if(back && att.alive) heal(att, Math.max(1, Math.round(d * back)));
     landed = true;
   }
   return landed;
 }
 function dealDamage(u, d, o = {}){
   if(!u.alive) return;
+  if(d >= u.hp && tv(u, 'undying') && !u.usedUndying){ // Second Wind: refuse to fall, once
+    u.usedUndying = true; d = u.hp - 1; float(u, '🌙 Second Wind', 'fl-status fl-buff'); log(`🌙 <b>${esc(u.name)}</b> refuses to fall!`);
+    u.hp = Math.max(1, u.hp - d); heal(u, Math.round(u.maxHp * 0.3)); return;
+  }
   u.hp = Math.max(0, u.hp - d);
+  if(!o.dot && hasStatus(u, 'sleep')) u.statuses = u.statuses.filter(x => x.s !== 'sleep');
   const cls = ['fl-dmg', o.crit ? 'fl-crit' : '', o.cls || '', o.em > 1 ? 'fl-strong' : o.em < 1 ? 'fl-weak' : ''].join(' ');
   const dl = float(u, `-${d}${o.crit ? '!' : ''}${o.em > 1 ? ' ▲' : o.em < 1 ? ' ▼' : ''}`, cls);
   anim(u, 'hit', dl); setTimeout(() => sfx(o.crit ? 'crit' : 'hit'), dl);
@@ -1567,21 +1769,43 @@ function applyStatus(t, s, dur, pow, src){
   if(ex){ ex.dur = Math.max(ex.dur, dur); ex.val = Math.max(ex.val, val); } else t.statuses.push({s, dur, val});
   float(t, `${d.icon} ${d.name}`, 'fl-status fl-' + d.kind);
 }
-const canUse = (u, s) => (u.cds[s.id] || 0) <= 0 && u.cp >= s.cp;
+// Illusions are harder to shrug off with talents, and bosses half-resist the two that would trivialise them.
+function statusChance(u, s, a, tg){
+  let ch = a.chance == null ? 1 : a.chance;
+  if(s.type === 'genjutsu') ch += tv(u, 'statusChance');
+  if(tg && tg.boss && (a.s === 'sleep' || a.s === 'confuse')) ch *= 0.5;
+  return Math.min(1, ch);
+}
+// A confused fighter sometimes lashes out at a random fighter on its own side.
+function redirect(u, t){
+  if(!hasStatus(u, 'confuse') || Math.random() >= 0.5) return t;
+  const pool = friends(u), n = pool[Math.floor(Math.random() * pool.length)];
+  if(!n) return t;
+  log(`😵 <b>${esc(u.name)}</b> is confused and lashes out at ${esc(n.name)}!`); float(u, 'Confused', 'fl-status fl-debuff');
+  return n;
+}
 
-function doBasic(u, t){ if(!t) return; anim(u, 'lunge'); log(`<b>${esc(u.name)}</b> attacks.`); attack(u, t, {power:1}); }
-function doCharge(u){ anim(u, 'charge'); log(`🌀 <b>${esc(u.name)}</b> gathers chakra.`); restoreCp(u, Math.round(u.maxCp * 0.3) + 4); }
+/* ---- actions ---- */
+function doBasic(u, t){ if(!t) return; t = redirect(u, t); anim(u, 'lunge'); log(`<b>${esc(u.name)}</b> attacks.`); attack(u, t, {power:BASIC_POWER, type:'basic'}); }
+function doCharge(u){
+  anim(u, 'charge'); log(`🌀 <b>${esc(u.name)}</b> gathers chakra${CHARGE.guard ? ' and braces' : ''}.`);
+  restoreCp(u, chargeGain(u)); if(CHARGE.guard) applyStatus(u, 'guard', 1, 0, u);
+}
 function useSkill(u, s, t){
-  u.cp -= s.cp; u.cds[s.id] = s.cd + 1; if(u.side === 'ally' && u.controller === 'player') S.counters.skills++; sfx('skill');
+  u.cp -= skillCost(u, s); u.cds[s.id] = skillCd(u, s) + 1;
+  if(s.hpCost){ const hc = hpCostOf(u, s); u.hp = Math.max(1, u.hp - hc); float(u, `-${hc} HP`, 'fl-dmg fl-self'); }
+  if(u.side === 'ally' && u.controller === 'player') S.counters.skills++; sfx('skill');
   float(u, `${s.icon} ${s.name}`, 'fl-skill');
-  log(`<b>${esc(u.name)}</b> uses <b style="color:${ELEMENTS[s.el].color}">${s.name}</b>!`);
+  log(`<b>${esc(u.name)}</b> uses <b style="color:${skillColor(s)}">${s.name}</b>!${s.hpCost ? ' ☠️ It costs blood.' : ''}`);
   const self = s.target === 'self', ally = s.target === 'ally' ? mostWounded(u) : null;
+  if(!self && !ally && s.target === 'enemy') t = redirect(u, t);
   const targets = self || ally ? [] : s.target === 'allEnemies' ? opponents(u) : [t && t.alive ? t : opponents(u)[0]];
   if(s.power) anim(u, 'lunge'); else anim(u, 'charge');
+  const gen = s.type === 'genjutsu';
   for(const tg of targets){
     if(!tg) continue;
-    const landed = s.power ? attack(u, tg, {power:s.power, hits:s.hits, el:s.el, critBonus:s.critBonus, dodgeMult:0.6}) : true;
-    if(landed) for(const a of s.apply || []) if(a.on !== 'self' && Math.random() < (a.chance == null ? 1 : a.chance)) applyStatus(tg, a.s, a.dur, a.pow, u);
+    const landed = s.power ? attack(u, tg, {power:s.power, hits:s.hits, el:s.el, type:s.type, critBonus:s.critBonus, dodgeMult:0.6, pierce:s.pierce, leech:s.leech}) : true;
+    if(landed) for(const a of s.apply || []) if(a.on !== 'self' && Math.random() < statusChance(u, s, a, tg)) applyStatus(tg, a.s, a.dur + (gen ? tv(u, 'genDur') : 0), a.pow, u);
   }
   const buffTo = ally || u;
   for(const a of s.apply || []) if((a.on === 'self' || self || ally) && Math.random() < (a.chance == null ? 1 : a.chance)) applyStatus(a.on === 'self' ? u : buffTo, a.s, a.dur, a.pow, u);
@@ -1599,8 +1823,87 @@ function useItem(u, id, t){
   if(us.cpPct) restoreCp(u, Math.round(u.maxCp * us.cpPct));
   if(us.damage && t){ const em = elemMult(us.el, t.el), d = Math.round((us.damage + S.char.level * us.scale) * em); dealDamage(t, d, {em}); log(`${it.icon} The tag blasts ${esc(t.name)} for <b>${d}</b>.`); }
 }
+
+/* ---- how much is a move worth? One value model shared by allied AI, auto-battle, and the auto-loadout picker ----
+   Units are "points of Power": a plain attack is worth about 1. */
+const STATUS_WORTH = {stun:1.1, sleep:1.1, slow:0.18, weaken:0.28, expose:0.3, confuse:0.45, blind:0.35, silence:0.4,
+  empower:0.3, guard:0.3, haste:0.22, regen:0, frenzy:0.4, vamp:0.25, focus:0.2, evasion:0.25};
+// average damage of one hit, ignoring luck and crits
+function hitDamage(u, s, t){
+  let d = u.atk * (s.power == null ? BASIC_POWER : s.power);
+  if(t) d *= elemMult(s.el, t.el);
+  if(s.el && u.elemBoost === s.el) d *= 1 + u.elemPct;
+  d *= 1 + tv(u, 'dmg') + ((u.t && u.t.dmgType && u.t.dmgType[s.type]) || 0);
+  if(hasStatus(u, 'empower')) d *= 1.3;
+  if(hasStatus(u, 'frenzy')) d *= 1.5;
+  if(hasStatus(u, 'weaken')) d *= 0.75;
+  if(t){ if(hasStatus(t, 'guard') && !s.pierce) d *= 0.65; if(hasStatus(t, 'expose')) d *= 1.25; if(hasStatus(t, 'frenzy')) d *= 1.2; }
+  return d;
+}
+// what the battle screen promises: expected damage to one target, crits included
+function previewDamage(u, s, t){
+  if(!s.power) return 0;
+  const crit = Math.min(1, (u.crit + (s.critBonus || 0) + (hasStatus(u, 'focus') ? 25 : 0)) / 100);
+  return Math.round(hitDamage(u, s, t) * s.hits * (1 + crit * (0.5 + tv(u, 'critDmg'))));
+}
+function moveValue(u, s, t, foes){
+  const atk = Math.max(1, u.atk), aoe = s.target === 'allEnemies', nT = aoe ? Math.min(3, Math.max(1, foes.length)) : 1;
+  let v = 0;
+  if(s.power){
+    const crit = Math.min(1, (u.crit + (s.critBonus || 0)) / 100), dmg = hitDamage(u, s, t) * s.hits * (1 + crit * 0.5) * 0.93 / atk * nT;
+    v += dmg; if(s.leech) v += dmg * s.leech * 0.5;
+  }
+  for(const a of s.apply || []){
+    const ch = a.chance == null ? 1 : a.chance, self = a.on === 'self' || s.target === 'self' || s.target === 'ally';
+    const tgt = self ? (s.target === 'ally' ? mostWounded(u) : u) : t; if(!tgt) continue;
+    let w;
+    if(a.s === 'burn' || a.s === 'bleed') w = (a.pow || 0.3) * a.dur * 0.9;
+    else if(a.s === 'regen') w = (a.pow || 0.05) * tgt.maxHp * a.dur / atk * 0.5;
+    else w = (STATUS_WORTH[a.s] || 0.2) * a.dur;
+    if(hasStatus(tgt, a.s)) w *= 0.15;                                          // already has it
+    if(!self && STATUSES[a.s].kind === 'debuff' && tgt.hp < tgt.maxHp * 0.15) w *= 0.3; // about to fall anyway
+    if(!self && tgt.boss && (a.s === 'sleep' || a.s === 'confuse')) w *= 0.5;
+    v += w * ch * (aoe ? nT : 1);
+  }
+  if(s.heal){
+    const who = s.target === 'ally' ? mostWounded(u) : u, urgent = 1 + clamp((0.5 - who.hp / who.maxHp) * 3, 0, 1.5);
+    v += Math.min(who.maxHp - who.hp, s.heal * who.maxHp) / atk * 0.9 * urgent;
+  }
+  if(s.cpRestore) v += Math.min(u.maxCp - u.cp, s.cpRestore * u.maxCp) / atk * 0.15;
+  if(s.cleanse) v += u.statuses.filter(x => STATUSES[x.s].kind === 'debuff').length * 0.5;
+  if(s.hpCost) v -= hpCostOf(u, s) / atk * 0.45 * (u.hp < u.maxHp * 0.5 ? 2 : 1);
+  // Chakra is paid back by Charging, which costs a turn; plenty of Chakra makes a technique nearly free
+  v -= skillCost(u, s) / chargeGain(u) * 0.8 * clamp(1.2 - u.cp / u.maxCp, 0.35, 1);
+  return v;
+}
+// Picks a move: {k:'skill', s} | {k:'attack'} | {k:'charge'} | {k:'item', id}
+function smartChoose(u, t){
+  const foes = opponents(u), pool = [];
+  for(const id of u.skills){
+    const s = SKILL[id]; if(!s || !canUse(u, s)) continue;
+    if((s.target === 'enemy' || s.target === 'allEnemies') && !foes.length) continue;
+    pool.push({k:'skill', s, v:moveValue(u, s, t, foes)});
+  }
+  const basic = {k:'attack', v:moveValue(u, BASIC, t, foes)}; pool.push(basic);
+  if(!u.isPet && u.side === 'ally' && u.hp < u.maxHp * 0.3 && !pool.some(m => m.s && m.s.heal && m.v > 0)){
+    const pot = ['moon_elixir', 'g_salve', 'salve'].find(id => S.inventory[id] > 0 && S.char.level >= ITEM[id].lvl);
+    if(pot) return {k:'item', id:pot};
+  }
+  pool.sort((a, b) => b.v - a.v);
+  const best = pool[0];
+  if(best.v < basic.v * 1.12 && u.cp < u.maxCp * 0.35) return {k:'charge'};
+  return best;
+}
+function perform(u, ch, t){
+  if(ch.k === 'skill') useSkill(u, ch.s, t);
+  else if(ch.k === 'item') useItem(u, ch.id, t);
+  else if(ch.k === 'charge') doCharge(u);
+  else doBasic(u, t);
+}
+// Foes (and ghosts) pick their moves with a little randomness; your side's AI uses the value model.
 function aiAct(u){
   const foes = opponents(u); if(!foes.length) return;
+  if(u.side === 'ally'){ const t = getTarget(); return perform(u, smartChoose(u, t), t); }
   const t = Math.random() < 0.7 ? foes.reduce((a, b) => (a.hp / a.maxHp <= b.hp / b.maxHp ? a : b)) : foes[Math.floor(Math.random() * foes.length)];
   const ready = u.skills.map(id => SKILL[id]).filter(s => s && canUse(u, s));
   const hurt = mostWounded(u);
@@ -1609,9 +1912,17 @@ function aiAct(u){
   const buff = ready.find(s => (s.target === 'self' || s.target === 'ally') && !s.heal && !(s.apply || []).every(a => hasStatus(s.target === 'ally' ? hurt : u, a.s)));
   if(buff && Math.random() < 0.35) return useSkill(u, buff, t);
   const off = ready.filter(s => s.target === 'enemy' || s.target === 'allEnemies');
-  if(off.length && Math.random() < (u.isPet ? 0.7 : 0.55)) return useSkill(u, off[Math.floor(Math.random() * off.length)], t);
+  if(off.length && Math.random() < 0.55) return useSkill(u, off[Math.floor(Math.random() * off.length)], t);
   if(u.cp < u.maxCp * 0.3 && Math.random() < 0.4) return doCharge(u);
   doBasic(u, t);
+}
+// Turns a unit over to the AI (or back to you) in the middle of a battle.
+function charOfUnit(u){ return u.isPet ? (u.owner === 'leader' ? S.char : recruitById(u.owner)) : u.key === 'leader' ? S.char : recruitById(u.key); }
+function setAuto(u, auto){
+  if(!B || !u || u.side !== 'ally' || u.key === 'leader') return;
+  const ch = charOfUnit(u); if(ch){ if(u.isPet) ch.petAuto = auto; else ch.auto = auto; }
+  u.controller = auto ? 'ai' : 'player';
+  if(auto && B.active === u && B.awaiting) playerAct(x => { const t = getTarget(); perform(x, smartChoose(x, t), t); });
 }
 function playerAct(fn){
   if(!B || !B.awaiting || B.over) return;
@@ -1667,7 +1978,7 @@ function addClanRep(n){ const c = S.char; if(!c.clan || !n) return 0; const befo
 function finishRun(outcome, fled = false){
   const c = S.char, oldLv = c.level, oldRank = rankOf(oldLv), win = outcome === true;
   const res = {win, fled, xp:RUN.xp, gold:RUN.gold, items:[], lines:[], kind:RUN.kind};
-  const petUnit = B && B.allies.find(a => a.isPet), squadUnits = B ? B.allies.filter(a => a.isSquad) : [];
+  const petUnits = B ? B.allies.filter(a => a.isPet) : [], squadUnits = B ? B.allies.filter(a => a.isSquad) : [];
   if(RUN.kind === 'mission'){
     const m = MISSION[RUN.id];
     res.title = win ? 'Mission complete' : fled ? 'Mission abandoned' : 'Mission failed'; res.sub = m.name; res.retry = {act:'startMission', arg:m.id, label:win ? 'Run it again' : 'Try again'};
@@ -1702,9 +2013,11 @@ function finishRun(outcome, fled = false){
     res.xp += Math.round(xpToNext(c.level) * 0.05); res.gold += 20 + c.level * 5;
     if(c.clan){ res.lines.push(`${CLAN[c.clan.id].crest} +10 clan reputation`); res.clanUp = addClanRep(10); }
   }
-  if(petUnit && (win || RUN.kind === 'event')){
-    c.bond[c.pet] = (c.bond[c.pet] || 0) + 1;
-    if(c.bond[c.pet] % 5 === 0 && bondLevel(c.bond[c.pet]) <= 10) res.lines.push(`🐾 ${PET[c.pet].name} reached bond level ${bondLevel(c.bond[c.pet])}!`);
+  if(win || RUN.kind === 'event') for(const pu of petUnits){
+    const owner = charOfUnit(pu); if(!owner || !owner.pet) continue;
+    owner.bond[owner.pet] = (owner.bond[owner.pet] || 0) + 1;
+    const b = owner.bond[owner.pet];
+    if(b % 5 === 0 && bondLevel(b) <= 10) res.lines.push(`🐾 ${esc(PET[owner.pet].name)}${owner === c ? '' : ` (${esc(owner.name)}'s)`} reached bond level ${bondLevel(b)}!`);
   }
   if(res.clanUp) res.lines.push(`🎖️ Clan rank up: ${CLAN_TIERS[res.clanUp].name}! Clan perks grow stronger.`);
   c.gold += res.gold;
@@ -1718,6 +2031,7 @@ function finishRun(outcome, fled = false){
   }
   const nr = rankOf(c.level); res.newRank = nr !== oldRank ? nr : null;
   res.newSkills = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl > oldLv && s.lvl <= c.level);
+  res.newTalent = TALENT_TIERS.filter(lv => lv > oldLv && lv <= c.level).length;
   res.ups.forEach(l => emit('levelUp', l));
   B = null; RUN = null; UI.results = res;
   res.ach = checkAchievements(true);
@@ -1965,20 +2279,7 @@ function sfx(type){
 /* ---------------- Auto-battle (smart local AI for your turns) ---------------- */
 function autoAct(){
   if(!B || !B.awaiting || B.over) return;
-  const p = B.active, t = getTarget(), ready = p.skills.map(id => SKILL[id]).filter(s => s && canUse(p, s));
-  const healS = ready.find(s => s.heal && s.target !== 'ally');
-  if(p.hp < p.maxHp * 0.35){
-    if(healS) return ACT.bSkill(healS.id);
-    const pot = ['moon_elixir','g_salve','salve'].find(id => S.inventory[id] > 0 && S.char.level >= ITEM[id].lvl);
-    if(pot) return ACT.bUse(pot);
-  }
-  const buff = ready.find(s => s.target === 'self' && !s.heal && !s.power && !(s.apply || []).every(a => hasStatus(p, a.s)));
-  if(buff && Math.random() < 0.6) return ACT.bSkill(buff.id);
-  const foes = opponents(p).length;
-  const off = ready.filter(s => s.power).map(s => [s, s.power * s.hits * elemMult(s.el, t.el) * (s.target === 'allEnemies' ? foes : 1) + (s.apply || []).length * 0.2]).sort((a, b) => b[1] - a[1]);
-  if(off.length) return ACT.bSkill(off[0][0].id);
-  if(p.cp < p.maxCp * 0.3) return ACT.bCharge();
-  ACT.bAttack();
+  playerAct(u => { const t = getTarget(); perform(u, smartChoose(u, t), t); });
 }
 
 /* ---------------- AI guide: Momo the lantern spirit ---------------- */
@@ -1988,9 +2289,10 @@ function guideState(){
   const c = S.char, st = charStats(c); syncDaily(); syncEvent();
   return {name:c.name, level:c.level, rank:rankOf(c.level).name, element:c.element, gold:c.gold, shards:S.shards, unspentPoints:c.points,
     stats:{hp:st.maxHp, chakra:st.maxCp, agility:st.agi, power:st.atk, crit:+st.crit.toFixed(1)}, alloc:c.alloc,
-    equipped:c.equip, loadout:c.loadout, learnedSkills:c.skills, inventory:S.inventory, pet:c.pet, pets:c.pets,
+    equipped:c.equip, loadout:c.loadout, maxLoadout:MAX_LOADOUT, learnedSkills:c.skills, inventory:S.inventory, pet:c.pet, pets:c.pets, petControl:c.petAuto === false ? 'player' : 'auto',
+    talents:c.talents.map((id, i) => ({tier:i, unlocksAtLevel:TALENT_TIERS[i], picked:id || (c.level >= TALENT_TIERS[i] ? 'NONE YET' : 'locked')})),
     clan:c.clan ? {id:c.clan.id, rank:CLAN_TIERS[clanTier(c.clan.rep)].name, rep:c.clan.rep} : null,
-    squad:activeSquad().map(r => ({id:r.id, name:r.name, level:r.level, element:r.element, points:r.points})), roster:S.squad.roster.length,
+    squad:activeSquad().map(r => ({id:r.id, name:r.name, level:r.level, element:r.element, points:r.points, control:r.auto ? 'auto' : 'player', pet:r.pet, petControl:r.petAuto === false ? 'player' : 'auto', talentPicksWaiting:talentsUnpicked(r)})), roster:S.squad.roster.length,
     arenaRating:S.arena.rating, event:{boss:ENEMY[S.event.bossId].name, bossElement:ENEMY[S.event.bossId].el, triesLeft:EVENT_TRIES - S.event.tries, pctDone:Math.round(S.event.dmg / S.event.pool * 100)},
     dailyQuests:S.daily.quests.map((q, i) => ({i, text:QUEST_POOL.find(x => x.id === q.id).text(q.n), progress:questProgress(q), need:q.n, claimed:q.claimed})),
     screen:UI.screen};
@@ -1998,7 +2300,8 @@ function guideState(){
 function guideList(kind){
   const c = S.char;
   if(kind === 'missions') return MISSIONS.filter(m => m.lvl <= c.level + 2).map(m => ({id:m.id, rank:m.rank, name:m.name, lvl:m.lvl, locked:c.level < m.lvl, clears:(S.missions[m.id] || {}).clears || 0, foes:[...new Set(m.stages.flatMap(s => s.foes.map(f => ENEMY[f[0]].name + ' (' + ENEMY[f[0]].el + ')')))]}));
-  if(kind === 'skills') return SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= c.level + 5).map(s => ({id:s.id, name:s.name, el:s.el, lvl:s.lvl, cp:s.cp, cd:s.cd, price:skillPrice(s), learned:c.skills.includes(s.id), effects:skillTags(s).join(', ')}));
+  if(kind === 'skills') return SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= c.level + 5).map(s => ({id:s.id, name:s.name, family:s.type, el:s.el, lvl:s.lvl, cp:s.cp, cd:s.cd, price:skillPrice(s), learned:c.skills.includes(s.id), effects:skillTags(s).join(', ')}));
+  if(kind === 'talents') return TALENTS.map(t => ({id:t.id, tier:t.tier, unlocksAtLevel:TALENT_TIERS[t.tier], name:t.name, effect:t.desc}));
   if(kind === 'shop') return ITEMS.filter(i => i.shop !== false && !i.shards && i.lvl <= c.level + 3).map(i => ({id:i.id, name:i.name, slot:i.slot, lvl:i.lvl, price:i.price, bonus:i.bonus || i.desc}));
   if(kind === 'pets') return PETS.map(p => ({id:p.id, name:p.name, el:p.el, lvl:p.lvl, price:p.price || null, shards:p.shards || null, owned:c.pets.includes(p.id), desc:p.desc}));
   if(kind === 'clans') return CLANS.map(cl => ({id:cl.id, name:cl.name, lvl:cl.lvl, perks:clanPerkText(cl, 0)}));
@@ -2008,15 +2311,15 @@ function guideList(kind){
 function need(cond, msg){ if(!cond) throw new Error(msg); }
 const GUIDE_TOOLS = [
   {name:'get_game_state', description:'Returns the player\'s current state: level, gold, stats, gear, techniques, pet, clan, daily quests and event status.', run:() => guideState()},
-  {name:'list_options', description:'Lists what is available. kind is one of missions, skills, shop, pets, clans, arena. Returns ids to use with the other tools.',
-   schema:{type:'object', properties:{kind:{type:'string', enum:['missions','skills','shop','pets','clans','arena']}}, required:['kind']}, run:i => guideList(String(i.kind))},
+  {name:'list_options', description:'Lists what is available. kind is one of missions, skills, shop, pets, clans, arena, talents. Returns ids to use with the other tools. Techniques come in four families: ninjutsu (elemental), taijutsu, genjutsu and kinjutsu.',
+   schema:{type:'object', properties:{kind:{type:'string', enum:['missions','skills','shop','pets','clans','arena','talents']}}, required:['kind']}, run:i => guideList(String(i.kind))},
   {name:'allocate_points', description:'Spends unspent stat points. Give how many go to hp, cp (chakra) and agi. Returns the new stats.', mutates:true,
    schema:{type:'object', properties:{hp:{type:'integer'}, cp:{type:'integer'}, agi:{type:'integer'}}},
    run:i => { const c = S.char, a = {hp:Math.max(0, i.hp | 0), cp:Math.max(0, i.cp | 0), agi:Math.max(0, i.agi | 0)}; need(a.hp + a.cp + a.agi <= c.points, `Only ${c.points} points available`); for(const k in a){ c.alloc[k] += a[k]; c.points -= a[k]; } return charStats(c); }},
   {name:'learn_skill', description:'Learns a technique at the Academy by id (costs gold) and equips it if a loadout slot is free.', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const s = SKILL[i.id], c = S.char; need(s && !s.enemyOnly && !s.petOnly, 'No such technique'); need(!c.skills.includes(s.id), 'Already learned'); need(c.level >= s.lvl, `Requires level ${s.lvl}`); need(c.gold >= skillPrice(s), 'Not enough gold'); c.gold -= skillPrice(s); c.skills.push(s.id); if(c.loadout.length < MAX_LOADOUT) c.loadout.push(s.id); return `Learned ${s.name}`; }},
-  {name:'set_loadout', description:'Sets the battle loadout to up to 6 learned technique ids, in order.', mutates:true,
+  {name:'set_loadout', description:`Sets the battle loadout to up to ${MAX_LOADOUT} learned technique ids, in order. Prefer optimize_team unless the player asked for specific techniques.`, mutates:true,
    schema:{type:'object', properties:{ids:{type:'array', items:{type:'string'}}}, required:['ids']},
    run:i => { const c = S.char, ids = (i.ids || []).map(String).filter(id => c.skills.includes(id)).slice(0, MAX_LOADOUT); need(ids.length, 'None of those are learned'); c.loadout = [...new Set(ids)]; return c.loadout; }},
   {name:'buy_item', description:'Buys an item from the Shop by id. qty defaults to 1.', mutates:true,
@@ -2025,12 +2328,28 @@ const GUIDE_TOOLS = [
   {name:'equip_item', description:'Equips an owned weapon, clothing, back or accessory item by id.', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const it = ITEM[i.id], c = S.char; need(it && SLOTS.includes(it.slot), 'Not equipment'); need(S.inventory[it.id] > 0, 'Not in inventory'); need(c.level >= it.lvl, `Requires level ${it.lvl}`); const prev = c.equip[it.slot]; if(prev) addInv(prev, 1); addInv(it.id, -1); c.equip[it.slot] = it.id; return `Equipped ${it.name}`; }},
-  {name:'adopt_pet', description:'Adopts a pet by id (gold or Moon Shards) and brings it along.', mutates:true,
-   schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
-   run:i => { const p = PET[i.id], c = S.char; need(p, 'No such pet'); need(!c.pets.includes(p.id), 'Already owned'); need(c.level >= p.lvl, `Requires level ${p.lvl}`);
-     if(p.shards){ need(S.shards >= p.shards, 'Not enough shards'); S.shards -= p.shards; } else { need(c.gold >= p.price, 'Not enough gold'); c.gold -= p.price; } c.pets.push(p.id); c.pet = p.id; return `${p.name} adopted`; }},
-  {name:'set_pet', description:'Chooses which owned pet fights beside the player. Pass an empty id to leave pets home.', mutates:true,
-   schema:{type:'object', properties:{id:{type:'string'}}}, run:i => { const c = S.char; need(!i.id || c.pets.includes(i.id), 'Pet not owned'); c.pet = i.id || null; return c.pet || 'none'; }},
+  {name:'adopt_pet', description:'Adopts a pet by id (paid by the player in gold or Moon Shards) for the player or one of their recruits (owner: "leader" or a recruit id) and brings it along. Every ninja can have one pet.', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, owner:{type:'string'}}, required:['id']},
+   run:i => { const p = PET[i.id], c = S.char, o = ninjaById(i.owner); need(p, 'No such pet'); need(o, 'No such ninja'); need(!o.pets.includes(p.id), 'Already owned'); need(o.level >= p.lvl, `Requires level ${p.lvl}`);
+     if(p.shards){ need(S.shards >= p.shards, 'Not enough shards'); S.shards -= p.shards; } else { need(c.gold >= p.price, 'Not enough gold'); c.gold -= p.price; } o.pets.push(p.id); o.pet = p.id; return `${p.name} adopted for ${o.name}`; }},
+  {name:'set_pet', description:'Chooses which owned pet fights behind a ninja (owner: "leader" or a recruit id). Pass an empty id to leave the pet home.', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, owner:{type:'string'}}}, run:i => { const o = ninjaById(i.owner); need(o, 'No such ninja'); need(!i.id || o.pets.includes(i.id), 'Pet not owned'); o.pet = i.id || null; return o.pet || 'none'; }},
+  {name:'set_control', description:'Chooses who plays a recruit\'s turns in battle (auto: true = the AI, false = the player), and likewise their pet (target "pet"). The leader is always the player\'s (use set_auto_battle).', mutates:true,
+   schema:{type:'object', properties:{id:{type:'string'}, target:{type:'string', enum:['ninja','pet']}, auto:{type:'boolean'}}, required:['id','auto']},
+   run:i => { const r = recruitById(String(i.id)); need(r, 'No such recruit'); if(i.target === 'pet') r.petAuto = !!i.auto; else r.auto = !!i.auto; return `${r.name}${i.target === 'pet' ? "'s pet" : ''} is ${i.auto ? 'on Auto' : 'player-controlled'}`; }},
+  {name:'optimize_team', description:'The all-in-one upgrade. For who = "leader", "all" (leader plus battle squad) or a recruit id: spends stat points, picks open talents, learns the best techniques, sets the best loadout, buys and equips the best gear and tops up supplies, within the player\'s gold. Use this for "gear me up", "optimize", "make me stronger". Returns what changed.', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}}}, run:i => { const l = optimizeTeam(i.who || 'all'); return l.length ? l : 'Everything was already set up well'; }},
+  {name:'auto_gear', description:'Buys and equips the best gear for who ("leader", "all" or a recruit id), spending at most budget gold (default: 90% of the player\'s gold).', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, budget:{type:'integer'}}},
+   run:i => { const ns = (!i.who || i.who === 'all') ? teamNinja() : [ninjaById(i.who)]; need(ns[0], 'No such ninja'); const got = applyGearPlan(gearPlan(ns, Math.min(S.char.gold, i.budget > 0 ? i.budget : Math.floor(S.char.gold * 0.9))).plan); return got.length ? got : 'Already well equipped'; }},
+  {name:'set_talent', description:'Picks a talent (id from list_options talents) for who ("leader" or a recruit id). Tier is 0-5. The first pick of a tier is free, changing it costs gold.', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, id:{type:'string'}}, required:['id']},
+   run:i => { const t = TALENT[i.id]; need(t, 'No such talent'); return pickTalent(ninjaById(i.who), t.tier, t.id); }},
+  {name:'customize_ninja', description:'Renames and restyles the leader or a recruit. Any field is optional: name (max 16), gender (m|f), hairStyle (spiky|short|ponytail|long|bun|bob|twin|braid), and hair, outfit, eyes, skin, bandColor, mask as #rrggbb colors (mask "none" removes it), headband (show|none).', mutates:true,
+   schema:{type:'object', properties:{who:{type:'string'}, name:{type:'string'}, gender:{type:'string'}, hairStyle:{type:'string'}, hair:{type:'string'}, outfit:{type:'string'}, eyes:{type:'string'}, skin:{type:'string'}, bandColor:{type:'string'}, mask:{type:'string'}, headband:{type:'string'}}},
+   run:i => { const c = ninjaById(i.who); need(c, 'No such ninja'); if(i.name){ need(String(i.name).trim(), 'A ninja needs a name'); c.name = String(i.name).trim().slice(0, 16); }
+     for(const k of ['gender', 'hairStyle', 'hair', 'outfit', 'eyes', 'skin', 'bandColor', 'mask']) if(i[k]){ const v = String(i[k]); need(k === 'gender' ? /^[mf]$/.test(v) : k === 'hairStyle' ? HAIR_STYLES.some(h => h.id === v) : k === 'mask' && v === 'none' || /^#[0-9a-f]{6}$/i.test(v), `Bad ${k}`); applyLook(c, k, v); }
+     if(i.headband) applyLook(c, 'band', i.headband === 'none' ? 'none' : 'show'); return `${c.name} looks different`; }},
   {name:'join_clan', description:'Joins a clan by id (200 gold, or 500 to switch).', mutates:true,
    schema:{type:'object', properties:{id:{type:'string'}}, required:['id']},
    run:i => { const cl = CLAN[i.id], c = S.char, cost = c.clan ? 500 : 200; need(cl, 'No such clan'); need(c.level >= cl.lvl, `Requires level ${cl.lvl}`); need(c.gold >= cost, 'Not enough gold'); c.gold -= cost; c.clan = {id:cl.id, rep:0}; return `Joined ${cl.name}`; }},
@@ -2049,8 +2368,8 @@ const GUIDE_TOOLS = [
      need(c.level >= EVENTS[0].lvl, 'Event opens at level 5'); syncEvent(); need(S.event.tries < EVENT_TRIES, 'No attempts left today'); GUIDE.pending = () => startEvent(); return 'Will start the Crimson Moon attempt'; }},
 ];
 const GUIDE_RULES = `You are Momo, a cheerful little lantern spirit who guides players of "Tsukimori", a cute turn-based ninja RPG in a moon-forest village. Speak warmly and briefly (2-5 short sentences, playful but clear; no markdown headers).
-Game facts: Elements counter wheel Fire>Wind>Lightning>Earth>Water>Fire (+25% strong, -25% weak). Stat points: hp +10 HP, cp +6 Chakra, agi +2 Agility (turn order, dodge, crit). Power comes from level, weapon and clan. Techniques cost Chakra and have cooldowns; Charge restores Chakra. Off-element techniques cost double. Missions D(1+) C(10+) B(20+) A(35+) S(50+). Pets fight beside you and gain bond. Clans give passive perks that grow with reputation. Echo Arena fights AI ghosts of other builds. Crimson Moon is a weekly boss with 3 tries a day. Daily quests and a login streak give rewards.
-You can act for the player with the tools. Check get_game_state before advising. When asked to do something, do it, then say plainly what you changed. Don't spend more than the player asked; if a request is vague ("gear me up"), prefer good value and keep some gold for supplies. Never invent ids: use list_options.`;
+Game facts: Elements counter wheel Fire>Wind>Lightning>Earth>Water>Fire (+25% strong, -25% weak). Stat points: hp +10 HP, cp +6 Chakra, agi +2 Agility (turn order, dodge, crit). Power comes from level, weapon and clan. Techniques cost Chakra and have cooldowns, and every technique hits much harder than a basic attack; Charge restores Chakra (about 35%) and braces with Guard. The loadout holds 8 techniques in four families: ninjutsu (the five elements; off-element costs double), taijutsu (cheap many-hit body arts), genjutsu (blind, sleep, confuse, silence) and kinjutsu (huge power for a share of your own HP). Talents: one pick per tier at levels 5, 12, 20, 30, 40 and 50. Every ninja (the player and each recruit) can have one pet, and the player can command a recruit or pet or leave it on Auto. Prefer the optimize_team tool for upgrade requests. Missions D(1+) C(10+) B(20+) A(35+) S(50+). Pets fight beside you and gain bond. Clans give passive perks that grow with reputation. Echo Arena fights AI ghosts of other builds. Crimson Moon is a weekly boss with 3 tries a day. Daily quests and a login streak give rewards.
+You can act for the player with the tools. Check get_game_state before advising. When asked to do something, do it, then say plainly what you changed. Don't spend more than the player asked; if a request is vague ("gear me up"), prefer good value and keep some gold for supplies. Never invent ids: use list_options. Spend the player's gold carefully and report plainly what you changed.`;
 function guideSay(role, text, extra){ GUIDE.msgs.push({role, text, extra}); if(GUIDE.msgs.length > 40) GUIDE.msgs.shift(); renderGuideMsgs(); }
 function renderGuide(){
   const g = $('#guide'); if(!g) return;
@@ -2128,13 +2447,9 @@ function suggestions(){
     out.push({text:`Spend your ${c.points} stat points (${a.hp} HP, ${a.cp} Chakra, ${a.agi} Agility suits a ${ELEMENTS[c.element].name} ninja).`, tool:'allocate_points', input:a}); }
   const claim = S.daily.quests.some(q => !q.claimed && questProgress(q) >= q.n) || EVENT_MILESTONES.some((m, i) => !S.event.claimed.includes(i) && S.event.dmg / S.event.pool * 100 >= m.pct);
   if(claim) out.push({text:'You have rewards waiting to be claimed.', tool:'claim_rewards', input:{}});
-  const sk = SKILLS.find(s => s.el === c.element && !s.enemyOnly && !s.petOnly && s.lvl <= c.level && !c.skills.includes(s.id) && c.gold >= s.price);
-  if(sk) out.push({text:`Learn ${sk.name} at the Academy for ${sk.price} gold.`, tool:'learn_skill', input:{id:sk.id}});
-  for(const sl of SLOTS){
-    const cur = ITEM[c.equip[sl]], score = it => it ? Object.entries(it.bonus || {}).reduce((a, [k, v]) => a + v * ({hp:.25, cp:.3, agi:2, atk:2.5, crit:1.5, dodge:1.5}[k] || 1), 0) : 0;
-    const best = ITEMS.filter(i => i.slot === sl && i.shop !== false && !i.shards && i.lvl <= c.level && i.price <= c.gold * 0.8).sort((a, b) => score(b) - score(a))[0];
-    if(best && score(best) > score(cur) * 1.15 && !(S.inventory[best.id] > 0)){ out.push({text:`Buy and equip ${best.name} (${fmtBonus(best.bonus)}) for ${best.price} gold.`, tool:'buy_equip', input:{id:best.id}}); break; }
-  }
+  { const L = autoLearn(JSON.parse(JSON.stringify(c)), Math.floor(c.gold * 0.6)); if(L.bought.length) out.push({text:`Learn ${L.bought.slice(0, 3).join(', ')} at the Academy (🪙 ${L.spent}). I'll set your best loadout too.`, tool:'optimize_team', input:{who:'leader'}}); }
+  if(talentsUnpicked(c)) out.push({text:`You have ${talentsUnpicked(c)} talent pick${talentsUnpicked(c) > 1 ? 's' : ''} waiting. I can choose the best for your build.`, tool:'optimize_team', input:{who:'leader'}});
+  { const gp = gearPlan(teamNinja(), Math.floor(c.gold * 0.8)); if(gp.plan.length) out.push({text:`Upgrade gear for ${[...new Set(gp.plan.map(x => x.c.name))].join(' and ')}: ${gp.plan.slice(0, 3).map(x => x.it.name).join(', ')}${gp.plan.length > 3 ? ' and more' : ''} (🪙 ${gp.plan.reduce((a, x) => a + x.price, 0)}).`, tool:'auto_gear', input:{who:'all'}}); }
   if(c.level >= SQUAD_LVL && S.squad.roster.length < MAX_SQUAD){ syncPool(); const pi = S.squad.pool.findIndex(r => r.cost <= c.gold * 0.7); if(pi >= 0) out.push({text:`Recruit ${S.squad.pool[pi].name} (${ELEMENTS[S.squad.pool[pi].element].name}, Lv ${S.squad.pool[pi].level}) for ${S.squad.pool[pi].cost} gold. Squadmates fight beside you!`, tool:'recruit_ninja', input:{index:pi}}); }
   for(const r of activeSquad()) if(r.points){ out.push({text:`${r.name} has ${r.points} points to spend.`, tool:'manage_recruit', input:{id:r.id, auto:true}}); break; }
   for(const r of activeSquad()) if(r.level < c.level && trainsLeft(r) > 0 && c.gold >= trainCost(r) * 3){ out.push({text:`Train ${r.name} (Lv ${r.level}) for ${trainCost(r)} gold.`, tool:'train_recruit', input:{id:r.id}}); break; }
@@ -2148,7 +2463,10 @@ function suggestions(){
 }
 const FAQ = [
   [/element|weak|strong|counter/i, 'Follow the wheel: Fire beats Wind, Wind beats Lightning, Lightning beats Earth, Earth beats Water, Water beats Fire. Strong hits deal +25%, weak ones −25%. Look for the ▲ on your skill buttons!'],
-  [/chakra|cp|charge/i, 'Techniques cost Chakra. When you run low, use Charge to recover about a third of it, or drink a Chakra Pill.'],
+  [/chakra|cp|charge/i, 'Techniques cost Chakra, and every one of them beats a basic attack. You also regain a little each turn. When you run low, Charge: it restores about 35% and braces you with Guard until your next turn. Chakra Pills work too.'],
+  [/talent/i, 'Talents unlock at levels 5, 12, 20, 30, 40 and 50, one pick per tier. Open the Ninja screen to choose, or tap Auto-pick and I will choose the best for your build.'],
+  [/taijutsu|genjutsu|kinjutsu|famil|type/i, 'Besides the five elements there are three element-free families at the Academy: Taijutsu (cheap, many-hit body arts), Genjutsu (blind, sleep, confuse and silence foes) and Kinjutsu (huge power, but each cast costs health).'],
+  [/customi|appearance|rename|name|look|hair/i, 'Open the Ninja screen and tap "Name and appearance" to rename your ninja and change their hair, outfit, eyes, skin and more. Squadmates have the same option on their Manage screen.'],
   [/point|stat|agil/i, 'Each level gives 3 points. HP keeps you standing, Chakra fuels techniques, and Agility makes you act first, dodge and crit more.'],
   [/squad|team|recruit|train/i, 'At the Squad Lodge you can recruit up to 6 ninja and bring 2 into battle. You command their turns too! Train them with gold, teach them techniques, and online you can even hire echoes of real players.'],
   [/pet|den/i, 'Pets from the Beast Den fight beside you on their own. They get stronger with bond every time you win together.'],
@@ -2164,7 +2482,7 @@ function offlineGuide(text){
   if(hit && !/next|do|help|spend|gear|pick|claim/i.test(text)) return guideSay('momo', hit[1]);
   let pick = sug;
   if(/spend|point/i.test(text)) pick = sug.filter(s => s.tool === 'allocate_points');
-  else if(/gear|equip|buy/i.test(text)) pick = sug.filter(s => s.tool === 'buy_equip');
+  else if(/gear|equip|buy/i.test(text)) pick = sug.filter(s => s.tool === 'auto_gear' || s.tool === 'buy_equip');
   else if(/mission|fight|battle/i.test(text)) pick = sug.filter(s => s.tool === 'start_battle');
   else if(/claim|reward/i.test(text)) pick = sug.filter(s => s.tool === 'claim_rewards');
   if(!pick.length) return guideSay('momo', /spend|point/i.test(text) ? 'You have no unspent points right now.' : /gear/i.test(text) ? 'Your gear is looking good for your level and budget!' : /claim/i.test(text) ? 'Nothing to claim yet. Keep going!' : 'Hmm, I have no special tips right now. A mission is always a good idea!');
@@ -2179,6 +2497,7 @@ function guideDo(i){
     let r;
     if(s.tool === 'buy_equip'){ GUIDE_TOOLS.find(t => t.name === 'buy_item').run(s.input); r = GUIDE_TOOLS.find(t => t.name === 'equip_item').run(s.input); }
     else r = GUIDE_TOOLS.find(t => t.name === s.tool).run(s.input);
+    if(Array.isArray(r)) r = r.join('. ');
     persist(); GUIDE.undo = snap; GUIDE.offerList = null;
     GUIDE.msgs.forEach(m => { m.extra = null; });
     guideSay('momo', typeof r === 'string' ? r + '!' : 'All done!');
@@ -2558,11 +2877,11 @@ function presence(){
   const k = JSON.stringify(p); if(k === NET.lastPresence) return; NET.lastPresence = k;
   NET.room.presence(p).catch(() => {});
 }
-function buildOf(c){ return {name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:c.bond[c.pet] || 0} : {}, clan:c.clan}; }
+function buildOf(c){ return {name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, talents:c.talents, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:(c.bond || {})[c.pet] || 0} : {}, clan:c.clan}; }
 function publishEcho(){
   if(!NET.db || !mineUid() || !S || !S.char) return;
   const c = S.char;
-  const sq = activeSquad(), build = Object.assign(buildOf(c), {squad:sq.map(r => ({name:r.name, element:r.element, level:r.level, look:r.look, alloc:r.alloc, equip:r.equip, skills:r.skills, loadout:r.loadout}))});
+  const sq = activeSquad(), build = Object.assign(buildOf(c), {squad:sq.map(r => Object.assign(buildOf(r), {clan:null}))});
   NET.db.doc('echoes/' + NET.uid).set({name:c.name, level:c.level, element:c.element, rating:S.arena.rating, power:buildPower(c, sq), squad:sq.length, build:JSON.stringify(build), updatedAt:Date.now()}).catch(() => {});
 }
 function publishRaid(){
@@ -2644,10 +2963,11 @@ const recruitById = id => S.squad.roster.find(r => r.id === id);
 const hireCost = (l, real) => real ? 150 + l * 50 : 100 + l * 40;
 const trainCost = r => 20 + r.level * 15;
 const trainsLeft = r => { const t = S.squad.train; if(t.day !== todayKey()){ t.day = todayKey(); t.n = {}; } return TRAIN_PER_DAY - (t.n[r.id] || 0); };
-const recruitSkillPrice = (r, s) => s.el === r.element ? s.price : s.price * 2;
+const recruitSkillPrice = (r, s) => skillPrice(s, r);
 const newId = () => 'r' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
 function asRecruit(g, origin){
   g.id = newId(); g.origin = origin; g.xp = 0; g.points = 0; g.pet = null; g.pets = []; g.bond = {}; g.clan = null; g.squad = []; delete g.diff;
+  g.auto = false; g.petAuto = true; g.talents = blankTalents();
   g.bound = {}; for(const sl of SLOTS) if(g.equip[sl]) g.bound[sl] = true;  // starting gear is bound to the recruit
   return g;
 }
@@ -2667,16 +2987,14 @@ function gainXpFor(r, amt){
   return ups;
 }
 // Recruits grow into their element: the lodge master teaches them each new technique of their element for free
-// as they reach its level. With auto-upgrade on (the default) the new technique takes the loadout slot of their weakest one.
+// as they reach its level. With auto-upgrade on (the default) the AI then re-picks their best loadout and any new talent tier.
 const recruitTechs = r => SKILLS.filter(s => s.el === r.element && !s.enemyOnly && !s.petOnly && s.lvl <= r.level);
 function learnNewTechs(r){
   const learned = recruitTechs(r).filter(s => !r.skills.includes(s.id));
-  for(const s of learned){
-    r.skills.push(s.id);
-    if(r.autoTech === false) continue;
-    if(r.loadout.length < MAX_LOADOUT){ r.loadout.push(s.id); continue; }
-    const weakest = r.loadout.reduce((w, id) => SKILL[id].lvl < SKILL[w].lvl ? id : w);
-    if(SKILL[weakest].lvl < s.lvl) r.loadout[r.loadout.indexOf(weakest)] = s.id;
+  for(const s of learned) r.skills.push(s.id);
+  if(r.autoTech !== false){
+    if(learned.length) autoLoadout(r);
+    if(talentsUnpicked(r)) r.talents = autoTalents(r, true);
   }
   return learned;
 }
@@ -2731,7 +3049,7 @@ function learnRecruit(r, id){
   const s = SKILL[id]; if(!s || s.enemyOnly || s.petOnly) throw new Error('No such technique');
   if(r.skills.includes(id)) throw new Error('Already learned'); if(r.level < s.lvl) throw new Error(`${r.name} needs level ${s.lvl}`);
   const cost = recruitSkillPrice(r, s); if(S.char.gold < cost) throw new Error('Not enough gold');
-  S.char.gold -= cost; r.skills.push(id); if(r.loadout.length < MAX_LOADOUT) r.loadout.push(id); return `${r.name} learned ${s.name}`;
+  S.char.gold -= cost; r.skills.push(id); if(r.loadout.length < MAX_LOADOUT) r.loadout.push(id); else if(r.autoTech !== false) autoLoadout(r); return `${r.name} learned ${s.name}`;
 }
 function allocRecruit(r, a){
   const t = (a.hp | 0) + (a.cp | 0) + (a.agi | 0); if(t > r.points || t < 0) throw new Error(`${r.name} has ${r.points} points`);
@@ -2765,21 +3083,22 @@ function fameHTML(){
   return `<div class="panel hl-panel" style="margin-top:12px">🌟 Your echo has been recruited by <b>${hb}</b> other ninja.${claim ? ` <button class="btn sm primary" data-act="claimHires">Claim 🪙 ${claim * 60} + 🔴 ${claim * 2}</button>` : ''}</div>`;
 }
 function recruitCardHTML(r, mode, i){
-  const st = charStats(r), act = S.squad.active.includes(r.id), E = ELEMENTS[r.element];
+  const st = charStats(r), act = S.squad.active.includes(r.id), E = ELEMENTS[r.element], pet = r.pet && PET[r.pet];
   const tags = `<div class="tags" style="margin-top:6px"><span class="tag">❤️ ${st.maxHp}</span><span class="tag">🔷 ${st.maxCp}</span><span class="tag">💨 ${st.agi}</span><span class="tag">⚔️ ${st.atk}</span></div>
-    <div class="tags" style="margin-top:4px">${r.loadout.map(id => `<span class="tag">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div>`;
+    <div class="tags" style="margin-top:4px">${r.loadout.map(id => `<span class="tag" style="border-color:${skillColor(SKILL[id])}">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div>`;
   let acts = '';
   if(mode === 'roster'){
     const tl = trainsLeft(r), capped = r.level >= S.char.level;
     acts = `${act ? '<span class="owned">✓ In squad</span>' : ''}
       <button class="btn sm ${act ? '' : 'primary'}" data-act="squadToggle" data-arg="${r.id}">${act ? 'Bench' : 'Add to squad'}</button>
+      <button class="btn sm" data-act="ctlR" data-arg="${r.id}" title="Who plays this ninja's turns in battle">${r.auto ? '🤖 Auto' : '🎮 You'}</button>
       <button class="btn sm" data-act="trainR" data-arg="${r.id}" ${capped || tl <= 0 || S.char.gold < trainCost(r) ? 'disabled' : ''}>${capped ? 'At leader level' : `Train 🪙${trainCost(r)} (${tl} left)`}</button>
-      <button class="btn sm" data-act="manageR" data-arg="${r.id}">Manage${r.points ? ` (+${r.points})` : ''}</button>`;
+      <button class="btn sm" data-act="manageR" data-arg="${r.id}">Manage${r.points || talentsUnpicked(r) ? ` (+${r.points + talentsUnpicked(r)})` : ''}</button>`;
   } else if(mode === 'pool') acts = `<button class="btn sm primary" data-act="hireR" data-arg="${i}" ${S.char.gold < r.cost ? 'disabled' : ''}>Recruit for 🪙 ${r.cost}</button>`;
-  return `<article class="panel ghost rc ${act ? 'active-r' : ''}"><div class="ps">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}</div>
+  return `<article class="panel ghost rc ${act ? 'active-r' : ''}"><div class="ps">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}${pet ? `<div class="ps-pet">${petSprite(r.pet)}</div>` : ''}</div>
     <div><h3>${esc(r.name)} <small class="muted" style="font-family:var(--body);font-size:12.5px">Lv ${r.level}</small></h3>
       <small class="muted">${r.origin === 'echo' ? `Echo of ${esc(r.fromName || 'a real ninja')}` : esc(r.archetype || 'Recruit')}</small>
-      <div class="gm"><span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span></div>
+      <div class="gm"><span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span>${pet ? `<span class="chip" style="--c:${ELEMENTS[pet.el].color}">🐾 ${pet.name}</span>` : ''}</div>
       ${mode === 'roster' ? `<div class="xpline" style="margin:6px 0 0"><span>XP</span><span class="bar xp thin"><i style="width:${r.level >= MAX_LEVEL ? 100 : r.xp / xpToNext(r.level) * 100}%"></i></span><span>${r.xp}/${xpToNext(r.level)}</span></div>` : ''}
       ${tags}</div>
     <div class="acts">${acts}</div></article>`;
@@ -2792,9 +3111,10 @@ function squadScreen(){
     <p class="note">Bring up to ${MAX_SQUAD} squadmates into every battle and command their turns yourself (or let Auto do it). They earn the same XP you do, share your clan perks, and can't outlevel you. Missions send tougher foes when your squad is bigger.</p>
     <div class="panel"><h3>Battle squad</h3><div class="squad-row">
       <div class="sq-slot lead"><div class="sq-sp">${playerSprite()}</div><b>${esc(c.name)}</b><small>Leader, Lv ${c.level}</small></div>
-      ${Array.from({length:MAX_SQUAD}, (_, i) => { const r = act[i]; return r ? `<button class="sq-slot" data-act="manageR" data-arg="${r.id}"><div class="sq-sp">${ninjaSVG(r.look, gearLooks(r), {scarf:ELEMENTS[r.element].color})}</div><b>${esc(r.name)}</b><small>${ELEMENTS[r.element].icon} Lv ${r.level}</small></button>` : `<div class="sq-slot empty"><div class="sq-sp big">＋</div><small>Empty slot</small></div>`; }).join('')}
-      ${c.pet ? `<div class="sq-slot"><div class="sq-sp">${petSprite(c.pet)}</div><b>${PET[c.pet].name}</b><small>Pet</small></div>` : ''}
-    </div><small class="muted">Team power ${buildPower(c, act)}</small></div>
+      ${Array.from({length:MAX_SQUAD}, (_, i) => { const r = act[i]; return r ? `<button class="sq-slot" data-act="manageR" data-arg="${r.id}"><div class="sq-sp">${ninjaSVG(r.look, gearLooks(r), {scarf:ELEMENTS[r.element].color})}${r.pet && PET[r.pet] ? `<div class="ps-pet">${petSprite(r.pet)}</div>` : ''}</div><b>${esc(r.name)}</b><small>${ELEMENTS[r.element].icon} Lv ${r.level}${r.auto ? ' · 🤖' : ''}</small></button>` : `<div class="sq-slot empty"><div class="sq-sp big">＋</div><small>Empty slot</small></div>`; }).join('')}
+      ${c.pet ? `<div class="sq-slot"><div class="sq-sp">${petSprite(c.pet)}</div><b>${PET[c.pet].name}</b><small>Your pet</small></div>` : ''}
+    </div><small class="muted">Team power ${buildPower(c, act)}. Each ninja can have a pet (Beast Den) and plays manually or on Auto.</small>
+    <div class="acts-row"><button class="btn primary sm" data-act="optTeam">✨ Optimize the whole team</button><small class="muted">Spends points, picks talents, learns the best techniques and buys and equips the best gear.</small></div></div>
     <h3 class="sub">Roster (${q.roster.length}/${MAX_ROSTER})</h3>
     <div class="stack">${q.roster.length ? q.roster.map(r => recruitCardHTML(r, 'roster')).join('') : '<div class="panel empty">No recruits yet. Hire one from the board below!</div>'}</div>
     <h3 class="sub">Recruit board</h3>
@@ -2808,36 +3128,45 @@ function squadScreen(){
 }
 function recruitScreen(){
   const r = recruitById(UI.recruitId); if(!r) return squadScreen();
-  const st = charStats(r), E = ELEMENTS[r.element], gear = ITEMS.filter(i => SLOTS.includes(i.slot) && S.inventory[i.id] > 0);
+  const st = charStats(r), E = ELEMENTS[r.element], gear = ITEMS.filter(i => SLOTS.includes(i.slot) && S.inventory[i.id] > 0), pet = r.pet && PET[r.pet];
   const row = (k, ic, name, val) => `<div class="srow"><span class="sic">${ic}</span><div><b>${name}</b><small>Points spent: ${r.alloc[k]}</small></div><span class="sv">${val}</span><button class="plus" data-act="allocR" data-arg="${r.id}:${k}" ${r.points ? '' : 'disabled'} aria-label="Add a point to ${name}">+</button></div>`;
-  const skills = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && (s.el === r.element || r.skills.includes(s.id)) && s.lvl <= r.level + 5);
+  const ctl = (act, auto, label) => `<div class="seg" role="group" aria-label="${label}"><button class="${auto ? '' : 'on'}" data-act="${act}" data-arg="${r.id}:0" aria-pressed="${!auto}">🎮 You command</button><button class="${auto ? 'on' : ''}" data-act="${act}" data-arg="${r.id}:1" aria-pressed="${auto}">🤖 Auto (AI)</button></div>`;
   return `<section><h2 class="scr-title">🎌 ${esc(r.name)}</h2>
     <button class="btn sm ghost" data-act="go" data-arg="squad">← Back to the lodge</button>
     <div class="char-grid" style="margin-top:10px">
-      <div class="panel doll"><div class="doll-sprite">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}</div>
+      <div class="panel doll"><div class="doll-sprite">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}${pet ? `<div class="ps-pet big">${petSprite(r.pet)}</div>` : ''}</div>
         <div class="rank-line"><b>Level ${r.level}</b><small>${r.origin === 'echo' ? `Echo of ${esc(r.fromName || 'a real ninja')}` : esc(r.archetype || 'Recruit')}</small></div>
-        <span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span></div>
+        <span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span>
+        <button class="btn sm" data-act="custom" data-arg="${r.id}">✏️ Name and appearance</button></div>
       <div class="panel"><div class="pts">${r.points ? `<b>${r.points}</b> points to spend` : 'No unspent points'} ${r.points ? `<button class="btn sm" data-act="autoAllocR" data-arg="${r.id}">Auto-assign</button>` : ''}</div>
         ${row('hp','❤️','Health', st.maxHp)}${row('cp','🔷','Chakra', st.maxCp)}${row('agi','💨','Agility', st.agi)}
         <div class="derived"><span>⚔️ Power ${st.atk}</span><span>🎯 Crit ${st.crit.toFixed(1)}%</span></div></div>
     </div>
+    <div class="panel" style="margin-top:12px"><h3>In battle</h3>
+      <p class="muted" style="font-size:13px">Choose who plays ${esc(r.name)}'s turns. You can also switch mid-battle.</p>${ctl('ctlRSet', !!r.auto, 'Who controls this ninja')}
+      <div class="acts-row" style="margin-top:10px"><button class="btn primary sm" data-act="optR" data-arg="${r.id}">✨ Optimize ${esc(r.name)}</button><small class="muted">Points, talents, techniques and gear, chosen by the AI.</small></div></div>
+    <h3 class="sub">Pet</h3>
+    <div class="panel">${pet ? `<div class="pet-line"><div class="ps">${petSprite(r.pet)}</div><div><b>${pet.name}</b> <span class="chip" style="--c:${ELEMENTS[pet.el].color}">${ELEMENTS[pet.el].icon} ${ELEMENTS[pet.el].name}</span><small class="muted">Bond ${bondLevel((r.bond || {})[r.pet])}. Stands behind ${esc(r.name)} in battle.</small></div></div>
+      <p class="muted" style="font-size:13px;margin-top:8px">Who plays the pet's turns?</p>${ctl('petCtlRSet', r.petAuto !== false, 'Who controls the pet')}`
+      : `<p class="muted">${esc(r.name)} has no pet yet. A pet fights right behind its ninja.</p>`}
+      <div class="acts-row" style="margin-top:8px"><button class="btn sm" data-act="denFor" data-arg="${r.id}">${pet ? 'Change pet in the Beast Den' : 'Choose a pet in the Beast Den'}</button></div></div>
+    <h3 class="sub">Talents</h3>${talentPanelHTML(r, r.id)}
     <h3 class="sub">Equipment</h3>
     <div class="slots">${SLOTS.map(sl => { const it = ITEM[r.equip[sl]]; return `<div class="panel slot"><div class="item-ic">${it ? it.icon : SLOT_INFO[sl].icon}</div>
       <div><small>${SLOT_INFO[sl].name}${it && r.bound[sl] ? ', bound' : ''}</small><b>${it ? it.name : 'Empty'}</b>${it ? `<small class="bonus">${fmtBonus(it.bonus)}</small>` : ''}</div>
       ${it ? `<button class="btn sm" data-act="unequipR" data-arg="${r.id}:${sl}" title="${r.bound[sl] ? 'Bound gear is discarded when removed' : ''}">${r.bound[sl] ? 'Discard' : 'Remove'}</button>` : ''}</div>`; }).join('')}</div>
-    ${gear.length ? `<p class="note" style="margin-top:10px">Equip from your pack (starting gear is bound to the recruit and is discarded when replaced):</p><div class="stack">${gear.map(it => `<div class="panel item"><div class="item-ic">${it.icon}</div><div class="item-b"><b>${it.name} ×${S.inventory[it.id]}</b><small class="bonus">${fmtBonus(it.bonus)}</small>${r.level < it.lvl ? `<small>Needs level ${it.lvl}</small>` : ''}</div><div class="item-act"><button class="btn sm primary" data-act="equipR" data-arg="${r.id}:${it.id}" ${r.level < it.lvl ? 'disabled' : ''}>Equip</button></div></div>`).join('')}</div>` : ''}
-    <h3 class="sub">Techniques (${r.loadout.length}/${MAX_LOADOUT} equipped)</h3>
-    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><small class="muted">${esc(r.name)} learns each new ${E.name} technique for free on reaching its level.</small>
-      <div class="seg" role="group" aria-label="Auto-upgrade techniques"><button class="${r.autoTech !== false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:1" aria-pressed="${r.autoTech !== false}">Auto-equip new</button><button class="${r.autoTech === false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:0" aria-pressed="${r.autoTech === false}">I'll choose</button></div></div>
-    <div class="stack">${skills.map(s => { const own = r.skills.includes(s.id), inLo = r.loadout.includes(s.id), lock = r.level < s.lvl, pr = recruitSkillPrice(r, s);
-      return `<article class="panel skill ${lock && !own ? 'locked' : ''}" style="--c:${ELEMENTS[s.el].color}"><div class="sk-ic">${s.icon}</div>
-        <div class="sk-body"><h4>${s.name}<small>Lv ${s.lvl}</small></h4><div class="tags"><span class="tag cp">${s.cp} CP</span>${skillTags(s).map(t => `<span class="tag">${t}</span>`).join('')}</div></div>
-        <div class="sk-act">${own ? `<button class="btn sm ${inLo ? '' : 'primary'}" data-act="loadR" data-arg="${r.id}:${s.id}">${inLo ? 'Unequip' : 'Equip'}</button>` : lock ? `<button class="btn sm" disabled>🔒 Lv ${s.lvl}</button>` : `<button class="btn sm primary" data-act="learnR" data-arg="${r.id}:${s.id}" ${S.char.gold < pr ? 'disabled' : ''}>Teach for 🪙 ${pr}</button>`}</div></article>`; }).join('')}</div>
+    <div class="acts-row" style="margin-top:8px"><button class="btn primary sm" data-act="gearR" data-arg="${r.id}">🛒 Buy and equip the best gear</button></div>
+    ${gear.length ? `<p class="note" style="margin-top:10px">Or equip from your pack (starting gear is bound to the recruit and is discarded when replaced):</p><div class="stack">${gear.map(it => `<div class="panel item"><div class="item-ic">${it.icon}</div><div class="item-b"><b>${it.name} ×${S.inventory[it.id]}</b><small class="bonus">${fmtBonus(it.bonus)}</small>${r.level < it.lvl ? `<small>Needs level ${it.lvl}</small>` : ''}</div><div class="item-act"><button class="btn sm primary" data-act="equipR" data-arg="${r.id}:${it.id}" ${r.level < it.lvl ? 'disabled' : ''}>Equip</button></div></div>`).join('')}</div>` : ''}
+    <h3 class="sub">Techniques</h3>
+    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><small class="muted">${esc(r.name)} learns each new ${E.name} technique for free on reaching its level. Other families are taught for gold.</small>
+      <div class="seg" role="group" aria-label="Auto-upgrade techniques"><button class="${r.autoTech !== false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:1" aria-pressed="${r.autoTech !== false}">AI picks</button><button class="${r.autoTech === false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:0" aria-pressed="${r.autoTech === false}">I'll choose</button></div></div>
+    ${techSectionHTML(r, r.id, 'recruit')}
     <div style="margin-top:16px"><button class="btn bad sm" data-act="dismissR" data-arg="${r.id}">Dismiss ${esc(r.name)}</button></div>
   </section>`;
 }
 
 /* ---------------- Actions ---------------- */
+const summarize = lines => lines.length ? lines.join('. ') : 'Everything is already set up well';
 const tryDo = f => { try{ const m = f(); persist(); render(); if(m) toast(m); }catch(e){ toast(e.message); } };
 const splitArg = a => { const i = a.indexOf(':'); return [a.slice(0, i), a.slice(i + 1)]; };
 const SQUAD_ACT = {
@@ -2849,7 +3178,14 @@ const SQUAD_ACT = {
   equipR: a => tryDo(() => { const [id, item] = splitArg(a); return equipRecruit(recruitById(id), item); }),
   unequipR: a => tryDo(() => { const [id, sl] = splitArg(a); unequipRecruit(recruitById(id), sl); }),
   learnR: a => tryDo(() => { const [id, sk] = splitArg(a); return learnRecruit(recruitById(id), sk); }),
-  autoTechR: a => tryDo(() => { const [id, v] = splitArg(a), r = recruitById(id); r.autoTech = v === '1'; if(r.autoTech) learnNewTechs(r); return r.autoTech ? `${r.name} will equip new techniques automatically` : `You'll pick ${r.name}'s techniques`; }),
+  ctlR: id => tryDo(() => { const r = recruitById(id); r.auto = !r.auto; return r.auto ? `${r.name} will fight on Auto` : `You will command ${r.name}`; }),
+  ctlRSet: a => tryDo(() => { const [id, v] = splitArg(a); recruitById(id).auto = v === '1'; }),
+  petCtlRSet: a => tryDo(() => { const [id, v] = splitArg(a); recruitById(id).petAuto = v === '1'; }),
+  denFor: id => { UI.denWho = id; go('den'); },
+  optR: id => tryDo(() => summarize(optimizeTeam(id))),
+  optTeam: () => tryDo(() => summarize(optimizeTeam('all'))),
+  gearR: id => tryDo(() => { const c = ninjaById(id), got = applyGearPlan(gearPlan([c], Math.max(0, S.char.gold)).plan); return got.length ? 'Equipped: ' + got.join(', ') : 'Already well equipped for your budget'; }),
+  autoTechR: a => tryDo(() => { const [id, v] = splitArg(a), r = recruitById(id); r.autoTech = v === '1'; if(r.autoTech){ learnNewTechs(r); autoLoadout(r); r.talents = autoTalents(r, true); } return r.autoTech ? `${r.name} will equip new techniques automatically` : `You'll pick ${r.name}'s techniques`; }),
   loadR: a => tryDo(() => { const [id, sk] = splitArg(a), r = recruitById(id), i = r.loadout.indexOf(sk); if(i >= 0) r.loadout.splice(i, 1); else { if(r.loadout.length >= MAX_LOADOUT) throw new Error('Loadout full'); r.loadout.push(sk); } }),
   dismissR: id => { const r = recruitById(id); showModal(`Dismiss ${esc(r.name)}?`, '<p>They leave the lodge for good. Gear you gave them returns to your pack; bound gear leaves with them.</p>', [{label:'Keep them', act:'closeModal'}, {label:'Dismiss', act:'doDismissR', arg:id, cls:'bad'}]); },
   doDismissR: id => { closeModal(); const q = S.squad, r = recruitById(id); if(!r) return; for(const sl of SLOTS) unequipRecruit(r, sl); q.roster = q.roster.filter(x => x.id !== id); q.active = q.active.filter(x => x !== id); persist(); go('squad'); toast(`${r.name} has left`); },
@@ -2884,6 +3220,200 @@ GUIDE_TOOLS.push(
      return `${r.name}: ${out.join(', ') || 'nothing changed'}`; }}
 );
 
+/* =====================================================================
+   AUTOMATION: pick the best talents, techniques and gear for any ninja.
+   Rule-based and offline. The technique ranking reuses the battle AI's value model (moveValue),
+   so what "best" means here is what the allied AI would actually want to cast. Momo calls these too.
+   ===================================================================== */
+const ninjaById = id => (!id || id === 'leader') ? S.char : recruitById(id);
+const teamNinja = () => [S.char, ...activeSquad()];
+const isLeaderChar = c => c === S.char;
+
+/* ---------------- talents ---------------- */
+// How well a talent suits a build (higher is better): it leans on the loadout's mix of technique families and the element.
+function talentFit(t, c){
+  const lo = c.loadout.map(id => SKILL[id]).filter(Boolean), n = Math.max(1, lo.length);
+  const share = ty => lo.filter(s => s.type === ty).length / n, avgCp = lo.reduce((a, s) => a + s.cp, 0) / n;
+  const el = c.element, longCd = lo.filter(s => s.cd >= 3).length;
+  const base = {hardy:1 + (el === 'earth' || el === 'water' ? 0.5 : 0), deep:0.8 + avgCp / 40, eyes:0.9 + (el === 'wind' || el === 'lightning' ? 0.3 : 0),
+    thrifty:0.9 + avgCp / 35, brisk:0.9 + longCd * 0.12, reflex:0.9 + (el === 'wind' ? 0.3 : 0),
+    fist:0.4 + 2.4 * share('taijutsu'), veil:0.4 + 2.6 * share('genjutsu'), elems:0.5 + 1.9 * share('ninjutsu'),
+    forbid:0.3 + 3.2 * share('kinjutsu'), thirst:1, ember:0.9, gambit:1, exec:1.05, stoic:0.95 + (el === 'earth' ? 0.3 : 0),
+    second:1.1, master:1.15, bless:1.2};
+  return base[t.id] == null ? 1 : base[t.id];
+}
+// The best pick for every unlocked tier. keep = true leaves choices already made alone.
+function autoTalents(c, keep){
+  const out = blankTalents();
+  TALENT_TIERS.forEach((lv, i) => {
+    if(c.level < lv) return;
+    if(keep && c.talents && TALENT[c.talents[i]]){ out[i] = c.talents[i]; return; }
+    out[i] = TALENTS.filter(t => t.tier === i).sort((a, b) => talentFit(b, c) - talentFit(a, c))[0].id;
+  });
+  return out;
+}
+const talentsOpen = c => TALENT_TIERS.filter(lv => c.level >= lv).length;
+const talentsUnpicked = c => TALENT_TIERS.filter((lv, i) => c.level >= lv && !TALENT[(c.talents || [])[i]]).length;
+function pickTalent(c, tier, id, free){
+  const t = TALENT[id]; if(!t || t.tier !== tier) throw new Error('No such talent');
+  if(c.level < TALENT_TIERS[tier]) throw new Error(`Unlocks at level ${TALENT_TIERS[tier]}`);
+  if(!c.talents) c.talents = blankTalents();
+  if(c.talents[tier] === id) return `${t.name} is already chosen`;
+  const swap = !!c.talents[tier], cost = swap ? talentSwapCost(c) : 0;
+  if(swap && !free){ if(S.char.gold < cost) throw new Error(`Changing a talent costs 🪙 ${cost}`); S.char.gold -= cost; }
+  c.talents[tier] = id; return `${t.name} chosen${swap && !free ? ` (-${cost} gold)` : ''}`;
+}
+const talentSwapCost = c => 60 + c.level * 10;
+
+/* ---------------- techniques ---------------- */
+// Worth of every technique to this ninja, judged on a sandbox battle (a wounded, half-spent ninja against two average foes).
+function worthMap(c){
+  const u = unitFromChar(c, 'ai', 'ally'); u.hp = Math.round(u.maxHp * 0.65); u.cp = Math.round(u.maxCp * 0.7);
+  const b = enemyStats(c.level), foes = [0, 1].map(() => mkUnit({name:'Foe', side:'enemy', controller:'ai', el:null, level:c.level, maxHp:Math.round(b.hp), maxCp:Math.round(b.cp), agi:Math.round(b.agi), atk:b.atk, crit:5, dodge:0, skills:[], kind:'ninja', look:{}}));
+  const saved = B; B = {allies:[u], enemies:foes, over:false, active:u, target:foes[0].uid, meta:{}, log:[], queue:[]};
+  const W = {};
+  try{ for(const s of SKILLS) if(!s.enemyOnly && !s.petOnly) W[s.id] = moveValue(u, s, foes[0], foes); } finally { B = saved; }
+  return W;
+}
+// The best MAX_LOADOUT of a pool of technique ids: top value, but with sane variety (a couple of buffs, a couple of heals, one cheap attack).
+function bestLoadout(c, pool, W){
+  W = W || worthMap(c);
+  const rows = [...new Set(pool)].map(id => SKILL[id]).filter(Boolean).map(s => ({s, v:W[s.id] == null ? 0 : W[s.id]})).sort((a, b) => b.v - a.v);
+  const isBuff = s => !s.power && !s.heal && !s.cpRestore && s.target === 'self', isHeal = s => s.heal || s.cpRestore;
+  const pick = [], n = f => pick.filter(r => f(r.s)).length;
+  for(const r of rows){
+    if(pick.length >= MAX_LOADOUT) break;
+    if(r.v <= 0.15) continue;
+    if(isBuff(r.s) && n(isBuff) >= 2) continue;
+    if(isHeal(r.s) && n(isHeal) >= 2) continue;
+    pick.push(r);
+  }
+  const swapIn = r => { if(!r || pick.includes(r)) return; if(pick.length < MAX_LOADOUT) pick.push(r); else { const i = pick.reduce((w, x, k) => x.v < pick[w].v && !(isHeal(x.s) || (x.s.power && x.s.cp <= 12)) ? k : w, pick.length - 1); pick[i] = r; } };
+  if(!pick.some(r => r.s.power && r.s.cp <= 12)) swapIn(rows.find(r => r.s.power && r.s.cp <= 12));
+  if(!pick.some(r => isHeal(r.s))) swapIn(rows.find(r => isHeal(r.s) && r.v > 0));
+  pick.sort((a, b) => a.s.lvl - b.s.lvl);
+  return {ids:pick.map(r => r.s.id), score:pick.reduce((a, r) => a + Math.max(0, r.v), 0)};
+}
+const autoLoadout = c => { c.loadout = bestLoadout(c, c.skills).ids; return c.loadout; };
+// Spend up to `budget` gold on techniques. First work out the best loadout from everything the ninja could learn, and buy the missing
+// parts of it (best value per gold first); only then fall back to the best marginal affordable buy. Never buys techniques that
+// would just be replaced later.
+function autoLearn(c, budget){
+  const W = worthMap(c), bought = [], eligible = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && c.level >= s.lvl); let spent = 0;
+  for(let guard = 0; guard < 16; guard++){
+    const ideal = bestLoadout(c, eligible.map(s => s.id), W);
+    const missing = ideal.ids.filter(id => !c.skills.includes(id)).map(id => SKILL[id]).filter(s => spent + skillPrice(s, c) <= budget);
+    let pick = null;
+    if(missing.length) pick = missing.sort((a, b) => W[b.id] / skillPrice(b, c) - W[a.id] / skillPrice(a, c))[0];
+    else{
+      const base = bestLoadout(c, c.skills, W).score; let best = null;
+      for(const s of eligible){
+        if(c.skills.includes(s.id)) continue;
+        const price = skillPrice(s, c); if(spent + price > budget) continue;
+        const gain = bestLoadout(c, [...c.skills, s.id], W).score - base; if(gain < Math.max(0.3, base * 0.08)) continue;
+        const eff = gain / Math.sqrt(price); if(!best || eff > best.eff) best = {s, eff};
+      }
+      pick = best && best.s;
+    }
+    if(!pick) break;
+    c.skills.push(pick.id); spent += skillPrice(pick, c); bought.push(pick.name);
+  }
+  return {bought, spent};
+}
+
+/* ---------------- gear ---------------- */
+// What a stat point is worth to this build, in "Power equivalents".
+function gearWeights(c){
+  const w = {hp:.25, cp:.3, agi:2, atk:2.5, crit:1.5, dodge:1.5};
+  const m = {fire:{atk:1.1, crit:1.1}, wind:{agi:1.2, dodge:1.1}, lightning:{crit:1.25, agi:1.1}, earth:{hp:1.4, dodge:.9}, water:{cp:1.25, hp:1.1}}[c.element] || {};
+  for(const k in m) w[k] *= m[k];
+  const lo = c.loadout.map(id => SKILL[id]).filter(Boolean); if(lo.length){ const avg = lo.reduce((a, s) => a + s.cp, 0) / lo.length; w.cp *= 0.8 + avg / 40; }
+  return w;
+}
+const gearScore = (it, c, w) => it ? Object.entries(it.bonus || {}).reduce((a, [k, v]) => a + v * (w[k] || 1), 0) : 0;
+// A plan of upgrades for several ninja at once. Each (ninja, slot) gets at most one upgrade, and the set is chosen to maximise
+// the total gain within the budget (a multiple-choice knapsack), so it never buys a cheap tier only to replace it.
+function gearPlan(ninjas, budget){
+  const unit = 10, cap = Math.max(0, Math.floor(budget / unit)), groups = [];
+  for(const c of ninjas){
+    const w = gearWeights(c);
+    for(const sl of SLOTS){
+      const cur = ITEM[c.equip[sl]], cs = gearScore(cur, c, w), opts = [];
+      for(const it of ITEMS){
+        if(it.slot !== sl || it.lvl > c.level || it.shards || it === cur) continue;
+        const owned = (S.inventory[it.id] || 0) > 0; if(!owned && it.shop === false) continue;
+        const price = owned ? 0 : it.price, gain = gearScore(it, c, w) - cs;
+        if(gain < Math.max(0.5, cs * 0.03) || price > budget) continue;
+        opts.push({c, sl, it, price, owned, gain, cost:Math.ceil(price / unit)});
+      }
+      if(opts.length) groups.push(opts);
+    }
+  }
+  let dp = new Array(cap + 1).fill(0); const picks = [];
+  for(const opts of groups){
+    const nd = dp.slice(), pk = new Int16Array(cap + 1).fill(-1);
+    opts.forEach((o, k) => { for(let b = o.cost; b <= cap; b++){ const v = dp[b - o.cost] + o.gain - o.price * 1e-6; if(v > nd[b]){ nd[b] = v; pk[b] = k; } } });
+    picks.push(pk); dp = nd;
+  }
+  const plan = []; let b = cap;
+  for(let g = groups.length - 1; g >= 0; g--){ const k = picks[g][b]; if(k >= 0){ plan.push(groups[g][k]); b -= groups[g][k].cost; } }
+  plan.sort((x, y) => (y.gain / (y.price + 10)) - (x.gain / (x.price + 10)));
+  return {plan, left:budget - plan.reduce((a, x) => a + x.price, 0)};
+}
+// Buys what's missing and equips it. Returns text lines.
+function applyGearPlan(plan){
+  const out = [];
+  for(const st of plan){
+    const {c, sl, it} = st; let paid = 0;
+    if(!(S.inventory[it.id] > 0)){ if(it.shop === false || S.char.gold < it.price) continue; S.char.gold -= it.price; addInv(it.id, 1); paid = it.price; }
+    if(isLeaderChar(c)){ const prev = c.equip[sl]; if(prev) addInv(prev, 1); addInv(it.id, -1); c.equip[sl] = it.id; }
+    else equipRecruit(c, it.id);
+    out.push(`${c.name}: ${it.name}${paid ? ` (🪙 ${paid})` : ''}`);
+  }
+  return out;
+}
+// Keep a few healing supplies on hand, up to `budget` gold.
+function stockSupplies(budget){
+  const L = S.char.level, want = [['salve', 4], ['pill', 3], ['g_salve', L >= 15 ? 3 : 0], ['spirit_pill', L >= 15 ? 2 : 0]], out = []; let spent = 0;
+  for(const [id, n] of want){
+    const it = ITEM[id]; if(!it || L < it.lvl) continue;
+    const k = Math.min(n - (S.inventory[id] || 0), Math.floor((budget - spent) / it.price)); if(k <= 0) continue;
+    S.char.gold -= k * it.price; addInv(id, k); spent += k * it.price; out.push(`${k}× ${it.name}`);
+  }
+  return out;
+}
+
+/* ---------------- put it together ---------------- */
+// Optimizes one ninja: stat points, talents, techniques, loadout. `budget` is spent on techniques only (gear is planned for the whole team).
+function optimizeNinja(c, budget){
+  const out = [];
+  if(c.points){ allocRecruit(c, autoAllocRecruit(c)); out.push('spent stat points'); }
+  const before = JSON.stringify(c.talents);
+  if(talentsUnpicked(c)){ c.talents = autoTalents(c, true); if(JSON.stringify(c.talents) !== before) out.push('picked talents'); }
+  const L = autoLearn(c, budget); if(L.bought.length) out.push(`learned ${L.bought.join(', ')} (🪙 ${L.spent})`);
+  S.char.gold -= L.spent;
+  const lo = c.loadout.join(); autoLoadout(c); if(c.loadout.join() !== lo) out.push(`set ${c.loadout.length} techniques`);
+  return out;
+}
+// The full treatment for the leader and the battle squad. Returns text lines describing what changed.
+function optimizeTeam(who){
+  const ninjas = who === 'all' || !who ? teamNinja() : [ninjaById(who)], lines = [];
+  const reserve = Math.round(S.char.gold * 0.08);
+  let pot = Math.max(0, S.char.gold - reserve);
+  const techShare = Math.round(pot * 0.4 / ninjas.length);
+  for(const c of ninjas){
+    const gold0 = S.char.gold, r = optimizeNinja(c, Math.min(techShare, Math.max(0, S.char.gold - reserve)));
+    if(r.length) lines.push(`${c.name}: ${r.join('; ')}`);
+    pot -= gold0 - S.char.gold;
+  }
+  const g = gearPlan(ninjas, Math.max(0, Math.min(pot, S.char.gold - reserve)));
+  const bought = applyGearPlan(g.plan);
+  if(bought.length) lines.push('Gear: ' + bought.join(', '));
+  const sup = stockSupplies(Math.max(0, Math.min(Math.round(S.char.gold * 0.5), S.char.gold - 0)));
+  if(sup.length) lines.push('Supplies: ' + sup.join(', '));
+  return lines;
+}
+
 /* ============================ UI SHELL ============================ */
 function go(screen){ UI.screen = screen; UI.itemPanel = false; closeModal(); render(); window.scrollTo(0, 0); }
 function render(){
@@ -2891,8 +3421,9 @@ function render(){
   const hudOn = S && S.char && !['title','create','battle'].includes(scr);
   hud.innerHTML = hudOn ? hudHTML() : ''; hud.style.display = hudOn ? '' : 'none';
   if(scr === 'battle'){ renderBattle(); renderGuide(); presence(); return; }
-  const R = {title:titleScreen, create:createScreen, hub:hubScreen, missions:missionScreen, academy:academyScreen, shop:shopScreen, home:homeScreen, character:charScreen, results:resultsScreen, system:systemScreen, den:denScreen, clan:clanScreen, squad:squadScreen, recruit:recruitScreen, arena:arenaScreen, event:eventScreen, journal:journalScreen, online:onlineScreen};
+  const R = {title:titleScreen, create:createScreen, hub:hubScreen, missions:missionScreen, academy:academyScreen, shop:shopScreen, home:homeScreen, character:charScreen, results:resultsScreen, system:systemScreen, den:denScreen, clan:clanScreen, squad:squadScreen, recruit:recruitScreen, arena:arenaScreen, event:eventScreen, journal:journalScreen, online:onlineScreen, custom:customScreen};
   $('#main').innerHTML = (R[scr] || hubScreen)();
+  document.querySelectorAll('.tabs .tab.on').forEach(t => { const p = t.parentElement; if(p) p.scrollLeft = t.offsetLeft - (p.clientWidth - t.clientWidth) / 2; }); // keep the active tab in view
   renderGuide(); presence(); netChanged();
 }
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1900); }
@@ -2919,6 +3450,85 @@ function hudHTML(){
       <button data-act="go" data-arg="journal" class="${on('journal')}"><span>📓</span><span>Journal</span></button>
       <button data-act="go" data-arg="system" class="${on('system')}"><span>💾</span><span>Save</span></button>
     </nav></div>`;
+}
+
+/* ============================ SHARED PANELS ============================
+   Used by the leader's screens and by each squadmate's screen. `who` is 'leader' or a recruit id. */
+
+// ---- talents ----
+function talentPanelHTML(c, who){
+  const un = talentsUnpicked(c);
+  return `<div class="panel talents"><div class="tal-head"><small class="muted">One talent per tier, unlocked by level (${TALENT_TIERS.join(', ')}). ${un ? `<b class="hl">${un} tier${un > 1 ? 's' : ''} waiting for a pick.</b> ` : ''}Changing a pick costs 🪙 ${talentSwapCost(c)}.</small>
+    <button class="btn sm" data-act="talentAuto" data-arg="${who}">🤖 Auto-pick</button></div>
+    ${TALENT_TIERS.map((lv, i) => {
+      const locked = c.level < lv, cur = (c.talents || [])[i];
+      return `<div class="tal-tier ${locked ? 'locked' : ''}"><div class="tal-lv">${locked ? '🔒' : cur ? '✓' : '★'} Level ${lv}</div><div class="tal-opts">${TALENTS.filter(t => t.tier === i).map(t =>
+        `<button class="tal ${cur === t.id ? 'on' : ''}" data-act="talent" data-arg="${who}:${i}:${t.id}" ${locked ? 'disabled' : ''} aria-pressed="${cur === t.id}"><span class="tal-ic">${t.icon}</span><b>${t.name}</b><small>${t.desc}</small></button>`).join('')}</div></div>`;
+    }).join('')}</div>`;
+}
+
+// ---- techniques ----
+const TECH_TABS = [...EL_ORDER, 'taijutsu', 'genjutsu', 'kinjutsu'];
+const techsFor = tab => SKILLS.filter(s => !s.enemyOnly && !s.petOnly && (ELEMENTS[tab] ? s.type === 'ninjutsu' && s.el === tab : s.type === tab));
+function techTabsHTML(active, key, c){
+  return `<div class="tabs" role="tablist">${TECH_TABS.map(t => {
+    const el = ELEMENTS[t], col = el ? el.color : TECH_TYPES[t].color, label = el ? `${el.icon} ${el.name}${t === c.element ? ' ★' : ''}` : `${TECH_TYPES[t].icon} ${TECH_TYPES[t].name}`;
+    return `<button class="tab ${t === active ? 'on' : ''}" style="--c:${col}" data-act="tab" data-arg="${key}:${t}" role="tab" aria-selected="${t === active}">${label}</button>`; }).join('')}</div>`;
+}
+function loadoutHTML(c, who){
+  const lead = who === 'leader', act = lead ? 'toggleLoad' : 'loadR', arg = id => lead ? id : `${who}:${id}`;
+  return `<div class="panel loadout"><div class="lo-head"><b>Battle loadout</b><small>${c.loadout.length} of ${MAX_LOADOUT} slots. Tap a slot to remove it.</small><button class="btn sm" data-act="bestLoadout" data-arg="${who}">🤖 Best loadout</button></div>
+    <div class="lo-slots">${Array.from({length:MAX_LOADOUT}, (_, i) => { const s = SKILL[c.loadout[i]];
+      return s ? `<button class="lo-slot" style="--c:${skillColor(s)}" data-act="${act}" data-arg="${arg(s.id)}" aria-label="Remove ${s.name}">${s.icon}<small>${s.name}</small></button>` : `<div class="lo-slot empty">empty</div>`; }).join('')}</div></div>`;
+}
+function skillCardHTML(s, c, who, U){
+  const lead = who === 'leader', own = c.skills.includes(s.id), inLo = c.loadout.includes(s.id), lock = c.level < s.lvl, price = skillPrice(s, c), arg = lead ? s.id : `${who}:${s.id}`;
+  let btn;
+  if(own) btn = `<button class="btn sm ${inLo ? '' : 'primary'}" data-act="${lead ? 'toggleLoad' : 'loadR'}" data-arg="${arg}">${inLo ? 'Unequip' : 'Equip'}</button>`;
+  else if(lock) btn = `<button class="btn sm" disabled>🔒 Level ${s.lvl}</button>`;
+  else btn = `<button class="btn sm primary" data-act="${lead ? 'learn' : 'learnR'}" data-arg="${arg}" ${S.char.gold < price ? 'disabled' : ''}>Learn for 🪙 ${price}</button>`;
+  const dmg = s.power ? previewDamage(U, s, null) : 0, ty = TECH_TYPES[s.type];
+  return `<article class="panel skill ${lock && !own ? 'locked' : ''}" style="--c:${skillColor(s)}"><div class="sk-ic">${s.icon}</div>
+    <div class="sk-body"><h4>${s.name}<small>Lv ${s.lvl}</small></h4><p>${s.desc}</p>
+      <div class="tags"><span class="tag cp">${s.cp} CP</span><span class="tag">${s.cd}-turn cooldown</span>${s.type !== 'ninjutsu' ? `<span class="tag">${ty.icon} ${ty.name}</span>` : ''}${dmg ? `<span class="tag dmg">≈${dmg} dmg${s.hits > 1 ? ' total' : ''}${s.target === 'allEnemies' ? ' each' : ''}</span>` : ''}${skillTags(s).map(t => `<span class="tag">${t}</span>`).join('')}</div></div>
+    <div class="sk-act">${own ? `<span class="owned">✓ Learned</span>` : ''}${btn}</div></article>`;
+}
+// mode 'academy' (the leader) or 'recruit'
+function techSectionHTML(c, who, mode){
+  const key = mode === 'recruit' ? 'recruit' : 'academy', tab = TECH_TABS.includes(UI.tab[key]) ? UI.tab[key] : c.element;
+  const U = unitFromChar(c, 'ai', 'ally');
+  const note = ELEMENTS[tab] ? (tab === c.element ? '★ Affinity element: techniques cost the standard price.' : 'Off-affinity ninjutsu costs double, but lets you cover your weak matchups.') : TECH_TYPES[tab].blurb + ' Same price for every ninja.';
+  return loadoutHTML(c, who) + techTabsHTML(tab, key, c) + `<p class="note">${note} "≈ dmg" is the typical hit with this ninja's stats.</p><div class="stack">${techsFor(tab).map(s => skillCardHTML(s, c, who, U)).join('')}</div>`;
+}
+
+// ---- appearance ----
+const MASK_COLORS = ['#3a3030', '#1f2a24', '#cfd2e6', '#8a95a3', '#b8363a', '#6b4a8c'];
+const BAND_COLORS = ['#27305e', '#b8363a', '#2f6f4f', '#d9a22b', '#2c2c38', '#8a3fbf', '#e7e3f0'];
+const hex6 = v => /^#[0-9a-f]{6}$/i.test(v || '') ? v : '#888888';
+function customScreen(){
+  const who = UI.custWho || 'leader', c = ninjaById(who); if(!c) return hubScreen();
+  const L = c.look, E = ELEMENTS[c.element];
+  const A = (k, v) => `data-act="lookSet" data-arg="${k}:${v}"`;
+  const seg = (key, opts, cur) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button class="${(cur == null ? L[key] : cur) === v ? 'on' : ''}" ${A(key, v)} aria-pressed="${(cur == null ? L[key] : cur) === v}">${l}</button>`).join('')}</div>`;
+  const sw = (key, list) => `<div class="swatches" role="group">${list.map(v => `<button class="sw ${L[key] === v ? 'on' : ''}" style="--c:${v}" ${A(key, v)} aria-label="${key} color ${v}" aria-pressed="${L[key] === v}"></button>`).join('')}<label class="sw custom" title="Pick any color"><input type="color" data-look="${key}" value="${hex6(L[key])}" aria-label="Custom ${key} color"><span>＋</span></label></div>`;
+  return `<section><h2 class="scr-title">✏️ Name and appearance</h2>
+    <button class="btn sm ghost" data-act="custBack">← Back</button>
+    <div class="create-grid" style="margin-top:10px">
+      <div class="panel preview" style="--c:${E.color}"><div class="preview-sprite">${ninjaSVG(L, gearLooks(c), {scarf:E.color})}</div><div class="preview-name">${esc(c.name)}</div>
+        <span class="chip" style="--c:${E.color}">${E.icon} ${E.name} affinity</span><small class="muted">Your element and gear stay the same.</small></div>
+      <div class="panel">
+        <div class="fld"><span>Name</span><div class="name-row"><input id="cust-name" maxlength="16" value="${esc(c.name)}" autocomplete="off" aria-label="Name"><button class="btn sm primary" data-act="renameApply">Save name</button></div></div>
+        <div class="fld"><span>Body</span>${seg('gender', [['m', 'Boy'], ['f', 'Girl']])}</div>
+        <div class="fld"><span>Hairstyle</span>${seg('hairStyle', HAIR_STYLES.map(h => [h.id, h.name]))}</div>
+        <div class="fld"><span>Hair color</span>${sw('hair', HAIR_COLORS)}</div>
+        <div class="fld"><span>Outfit color</span>${sw('outfit', OUTFIT_COLORS)}</div>
+        <div class="fld"><span>Eyes</span>${sw('eyes', EYE_COLORS)}</div>
+        <div class="fld"><span>Skin</span>${sw('skin', SKIN_TONES)}</div>
+        <div class="fld"><span>Headband</span>${seg('band', [['show', 'Worn'], ['none', 'None']], L.band === 'none' ? 'none' : 'show')}${L.band === 'none' ? '' : sw('bandColor', BAND_COLORS)}</div>
+        <div class="fld"><span>Face wrap</span><div class="swatches"><button class="sw none ${L.mask ? '' : 'on'}" ${A('mask', 'none')} aria-label="No face wrap" aria-pressed="${!L.mask}">✕</button>${MASK_COLORS.map(v => `<button class="sw ${L.mask === v ? 'on' : ''}" style="--c:${v}" ${A('mask', v)} aria-label="Face wrap ${v}" aria-pressed="${L.mask === v}"></button>`).join('')}</div></div>
+        <button class="btn sm" data-act="lookRandom">🎲 Surprise me</button>
+      </div>
+    </div></section>`;
 }
 
 /* ============================ SCREENS ============================ */
@@ -2980,6 +3590,8 @@ function hubScreen(){
   return `<section>
     <div class="village-wrap">${villageSVG()}<div id="net-village" class="net-village" aria-hidden="true"></div></div>
     ${c.points ? `<div class="panel notice" data-act="go" data-arg="character" role="button" tabindex="0">⬆️ You have ${c.points} unspent stat points. Tap to allocate them.</div>` : ''}
+    ${talentsUnpicked(c) ? `<div class="panel notice" data-act="go" data-arg="character" role="button" tabindex="0">🌟 You have ${talentsUnpicked(c)} talent pick${talentsUnpicked(c) > 1 ? 's' : ''} waiting. Tap to choose.</div>` : ''}
+    ${(S.squad.roster || []).filter(m => talentsUnpicked(m) && m.autoTech === false).map(m => `<div class="panel notice" data-act="manageR" data-arg="${m.id}" role="button" tabindex="0">🌟 ${esc(m.name)} has a talent pick waiting.</div>`).join('')}
     ${(S.squad.roster || []).filter(m => m.points).map(m => `<div class="panel notice" data-act="manageR" data-arg="${m.id}" role="button" tabindex="0">👥 ${esc(m.name)} has ${m.points} unspent stat points. Tap to allocate them.</div>`).join('')}
     <div class="hub-grid">
       ${b('missions','📜','Mission Board','Ranked missions for XP and gold')}
@@ -3017,27 +3629,12 @@ function missionCard(m){
   </article>`;
 }
 function academyScreen(){
-  const c = S.char, tab = UI.tab.academy || c.element, list = SKILLS.filter(s => s.el === tab && !s.enemyOnly && !s.petOnly);
+  const c = S.char;
   return `<section><h2 class="scr-title">🏯 Academy</h2>
-    <div class="panel loadout"><div class="lo-head"><b>Battle loadout</b><small>${c.loadout.length} of ${MAX_LOADOUT} slots. Tap a slot to remove it.</small></div>
-      <div class="lo-slots">${Array.from({length:MAX_LOADOUT}, (_, i) => { const s = SKILL[c.loadout[i]]; return s ? `<button class="lo-slot" style="--c:${ELEMENTS[s.el].color}" data-act="toggleLoad" data-arg="${s.id}" aria-label="Remove ${s.name}">${s.icon}<small>${s.name}</small></button>` : `<div class="lo-slot empty">empty</div>`; }).join('')}</div></div>
-    <div class="tabs" role="tablist">${EL_ORDER.map(e => `<button class="tab ${e === tab ? 'on' : ''}" style="--c:${ELEMENTS[e].color}" data-act="tab" data-arg="academy:${e}" role="tab" aria-selected="${e === tab}">${ELEMENTS[e].icon} ${ELEMENTS[e].name}${e === c.element ? ' ★' : ''}</button>`).join('')}</div>
-    <p class="note">${tab === c.element ? '★ Your affinity element: techniques cost the standard price.' : 'Off-affinity techniques cost double, but let you cover your weak matchups.'}</p>
-    <div class="stack">${list.map(skillCard).join('')}</div>
+    <p class="note">Five elements of ninjutsu, plus three element-free families: <b>🥋 Taijutsu</b> (cheap, many-hit), <b>🌀 Genjutsu</b> (illusions) and <b>☠️ Kinjutsu</b> (forbidden, costs health). Equip up to ${MAX_LOADOUT}.</p>
+    ${techSectionHTML(c, 'leader', 'academy')}
+    <div class="acts-row" style="margin-top:12px"><button class="btn primary sm" data-act="optMe">✨ Let the AI pick my techniques, talents and gear</button></div>
   </section>`;
-}
-function skillCard(s){
-  const c = S.char, owned = c.skills.includes(s.id), inLo = c.loadout.includes(s.id), locked = c.level < s.lvl, price = skillPrice(s);
-  let btn;
-  if(owned) btn = `<button class="btn ${inLo ? '' : 'primary'}" data-act="toggleLoad" data-arg="${s.id}">${inLo ? 'Unequip' : 'Equip'}</button>`;
-  else if(locked) btn = `<button class="btn" disabled>🔒 Level ${s.lvl}</button>`;
-  else btn = `<button class="btn primary" data-act="learn" data-arg="${s.id}" ${c.gold < price ? 'disabled' : ''}>Learn for 🪙 ${price}</button>`;
-  return `<article class="panel skill ${locked && !owned ? 'locked' : ''}" style="--c:${ELEMENTS[s.el].color}">
-    <div class="sk-ic">${s.icon}</div>
-    <div class="sk-body"><h4>${s.name}<small>Lv ${s.lvl}</small></h4><p>${s.desc}</p>
-      <div class="tags"><span class="tag cp">${s.cp} CP</span><span class="tag">${s.cd}-turn cooldown</span>${skillTags(s).map(t => `<span class="tag">${t}</span>`).join('')}</div></div>
-    <div class="sk-act">${owned ? `<span class="owned">✓ Learned</span>` : ''}${btn}</div>
-  </article>`;
 }
 function shopScreen(){
   const tab = UI.tab.shop, c = S.char, list = ITEMS.filter(i => i.slot === tab && i.shop !== false && !i.shards);
@@ -3062,6 +3659,7 @@ function homeScreen(){
         <div><small>${SLOT_INFO[sl].name}</small><b>${it ? it.name : 'Empty'}</b>${it ? `<small class="bonus">${fmtBonus(it.bonus)}</small>` : '<small>Buy gear at the Shop</small>'}</div>
         ${it ? `<button class="btn sm" data-act="unequip" data-arg="${sl}">Remove</button>` : ''}</div>`; }).join('')}</div>
     </div>
+    <div class="acts-row" style="margin-top:10px"><button class="btn primary sm" data-act="gearMe">🛒 Buy and equip my best gear</button><button class="btn sm" data-act="gearTeam">🛒 Gear up the whole team</button><small class="muted">Spends up to 90% of your gold on the best upgrades for each ninja.</small></div>
     <h3 class="sub">Inventory</h3>
     <div class="stack">${inv.length ? inv.map(it => { const val = Math.floor((it.price || 100) / 2), gear = it.slot !== 'consumable';
       return `<div class="panel item"><div class="item-ic">${it.icon}</div>
@@ -3090,6 +3688,9 @@ function charScreen(){
         <button class="btn sm ghost" data-act="respec" ${c.alloc.hp + c.alloc.cp + c.alloc.agi ? '' : 'disabled'}>Refund all points</button>
       </div>
     </div>
+    <div class="panel" style="margin-top:12px"><h3>Tools</h3><div class="acts-row"><button class="btn sm" data-act="custom" data-arg="leader">✏️ Name and appearance</button><button class="btn primary sm" data-act="optMe">✨ Optimize me</button><button class="btn sm" data-act="optTeam">✨ Optimize the team</button></div>
+      <small class="muted">Optimize spends your points, picks talents, learns the best techniques and equips the best gear.</small></div>
+    <h3 class="sub">Talents</h3>${talentPanelHTML(c, 'leader')}
     <div class="panel" style="margin-top:12px"><h3>Rank path</h3><ol class="ranks">${RANKS.map(x => `<li class="${c.level >= x.min ? 'done' : ''} ${x === r ? 'cur' : ''}"><b>${x.name}</b><small>Level ${x.min}+</small></li>`).join('')}</ol></div>
     <div class="panel wheel-wrap">${wheelSVG(c.element)}<div><h3>Your matchups</h3><p class="muted">${ELEMENTS[c.element].name} techniques hit ${ELEMENTS[ELEMENTS[c.element].beats].name} foes 25% harder. ${ELEMENTS[EL_ORDER.find(e => ELEMENTS[e].beats === c.element)].name} techniques hit you 25% harder, so learn an off-element technique to cover it.</p></div></div>
     <div class="panel records" style="margin-top:12px"><span>📜 Missions cleared ${S.stats.missions}</span><span>🏆 Battles won ${S.stats.won}</span><span>🩹 Battles lost ${S.stats.lost}</span><span>🏟️ Arena ${S.arena.wins}–${S.arena.losses}</span><span>🌕 Moon Shards ${S.shards}</span></div>
@@ -3097,7 +3698,7 @@ function charScreen(){
 }
 function resultsScreen(){
   const r = UI.results; if(!r) return hubScreen();
-  const c = S.char, mine = r.newSkills.filter(s => s.el === c.element);
+  const c = S.char, mine = r.newSkills.filter(s => s.type === 'ninjutsu' ? s.el === c.element : true);
   return `<section class="${r.win ? 'win' : 'lose'}">
     <div class="res-banner"><span>${r.title}</span><small>${esc(r.sub)}</small></div>
     <div class="panel res-body"><div class="res-sprite ${r.win ? 'cheer' : 'slump'}">${playerSprite()}</div>
@@ -3108,6 +3709,7 @@ function resultsScreen(){
     ${r.ups.length ? `<div class="panel hl-panel sq-up"><div>⬆️ Reached level ${c.level}! ${c.points ? `You have ${c.points} stat points to spend.` : 'Points spent.'}</div>${c.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAlloc">Auto-assign</button><button class="btn sm" data-act="go" data-arg="character">Choose myself</button></span>` : ''}</div>` : ''}
     ${(r.squadUps || []).map(u => { const m = recruitById(u.id); if(!m) return ''; return `<div class="panel hl-panel sq-up"><div>👥 <b>${esc(m.name)}</b> reached level ${u.level}! ${m.points ? `${m.points} stat points to spend.` : 'Points already spent.'}${u.learned.length ? `<br>📖 Learned ${u.learned.map(id => SKILL[id].icon + ' ' + SKILL[id].name).join(', ')}${m.autoTech !== false ? ` and equipped ${u.learned.length > 1 ? 'them' : 'it'}` : ''}.` : ''}</div>${m.points ? `<span class="res-acts"><button class="btn sm primary" data-act="autoAllocR" data-arg="${m.id}">Auto-assign</button><button class="btn sm" data-act="manageR" data-arg="${m.id}">Choose myself</button></span>` : ''}</div>`; }).join('')}
     ${(r.ach || []).map(a => `<div class="panel hl-panel">🏅 Achievement: ${a.icon} ${a.name}! ${a.reward.gold ? `+${a.reward.gold} gold ` : ''}${a.reward.shards ? `+${a.reward.shards} shards` : ''}</div>`).join('')}
+    ${r.newTalent ? `<div class="panel hl-panel sq-up"><div>🌟 A new talent tier unlocked! Pick a talent for ${esc(c.name)}.</div><span class="res-acts"><button class="btn sm primary" data-act="go" data-arg="character">Choose</button><button class="btn sm" data-act="optMe">Let the AI pick</button></span></div>` : ''}
     ${r.newRank ? `<div class="panel hl-panel">🎖️ New rank: ${r.newRank.name}. ${r.newRank.desc}</div>` : ''}
     ${mine.length ? `<div class="panel hl-panel">📖 New at the Academy: ${mine.map(s => s.icon + ' ' + s.name).join(', ')}</div>` : ''}
     ${!r.win && !r.fled ? `<p class="muted center">Tip: bring salves, Charge when Chakra runs low, and lead with the element that beats your foe.</p>` : ''}
@@ -3141,24 +3743,28 @@ function systemScreen(){
 /* ---------- Beast Den (pets) ---------- */
 function denScreen(){
   const c = S.char; if(c.level < 3) return lockedScreen('🦊 Beast Den', 3, 'Beast handlers will trust you with a partner once you prove yourself on a few missions.');
-  const st = charStats(c);
+  const members = [c, ...S.squad.roster], owner = UI.denWho && UI.denWho !== 'leader' && recruitById(UI.denWho) ? recruitById(UI.denWho) : c, who = owner === c ? 'leader' : owner.id;
+  const st = charStats(owner), you = owner === c;
   return `<section><h2 class="scr-title">🦊 Beast Den</h2>
-    <p class="note">One pet fights beside you under its own control. Its stats scale with yours, and every battle it wins together with you raises its bond (up to level 10, +6% stats per level).</p>
+    <p class="note">Every ninja can bring one pet. It stands behind its ninja, its stats scale with its owner's, and each battle it wins raises its bond (up to level 10, +6% stats per level). You can command a pet yourself or leave it to the AI.</p>
+    ${members.length > 1 ? `<div class="tabs" role="tablist" aria-label="Choose whose pet">${members.map(m => { const w = m === c ? 'leader' : m.id; return `<button class="tab ${w === who ? 'on' : ''}" data-act="denFor" data-arg="${w}" role="tab" aria-selected="${w === who}">${m === c ? '★ ' : ''}${esc(m.name)}${m.pet && PET[m.pet] ? ' 🐾' : ''}</button>`; }).join('')}</div>` : ''}
+    <p class="muted" style="margin-bottom:8px">Pets for <b>${esc(owner.name)}</b> (level ${owner.level}). Adopting costs your gold.</p>
     <div class="stack">${PETS.map(p => {
-      const own = c.pets.includes(p.id), act = c.pet === p.id, lock = c.level < p.lvl, bond = c.bond[p.id] || 0;
-      const pu = unitFromPet(p.id, st, 'ally', bond, c.level);
+      const own = owner.pets.includes(p.id), act = owner.pet === p.id, lock = owner.level < p.lvl, bond = (owner.bond || {})[p.id] || 0;
+      const pu = unitFromPet(p.id, st, 'ally', bond, owner.level);
       const cost = p.shards ? `🔴 ${p.shards} shards` : `🪙 ${p.price}`;
       const afford = p.shards ? S.shards >= p.shards : c.gold >= p.price;
       let btn;
-      if(own) btn = act ? `<button class="btn" data-act="petSet" data-arg="">Send home</button>` : `<button class="btn primary" data-act="petSet" data-arg="${p.id}">Bring along</button>`;
+      if(own) btn = act ? `<button class="btn" data-act="petSet" data-arg="${who}:">Send home</button>` : `<button class="btn primary" data-act="petSet" data-arg="${who}:${p.id}">Bring along</button>`;
       else if(lock) btn = `<button class="btn" disabled>🔒 Level ${p.lvl}</button>`;
-      else btn = `<button class="btn primary" data-act="petBuy" data-arg="${p.id}" ${afford ? '' : 'disabled'}>Adopt for ${cost}</button>`;
+      else btn = `<button class="btn primary" data-act="petBuy" data-arg="${who}:${p.id}" ${afford ? '' : 'disabled'}>Adopt for ${cost}</button>`;
+      const ctl = act ? `<div class="seg" role="group" aria-label="Who controls the pet"><button class="${owner.petAuto === false ? 'on' : ''}" data-act="petCtl" data-arg="${who}:0" aria-pressed="${owner.petAuto === false}">🎮 You command</button><button class="${owner.petAuto === false ? '' : 'on'}" data-act="petCtl" data-arg="${who}:1" aria-pressed="${owner.petAuto !== false}">🤖 Auto (AI)</button></div>` : '';
       return `<article class="panel pet-card ${act ? 'active' : ''} ${lock && !own ? 'locked' : ''}">
         <div class="ps">${petSprite(p.id)}</div>
         <div><h3>${p.name} <span class="chip" style="--c:${ELEMENTS[p.el].color}">${ELEMENTS[p.el].icon} ${ELEMENTS[p.el].name}</span></h3>
           <p class="muted" style="font-size:13.5px">${p.desc}</p>
-          <div class="tags"><span class="tag">❤️ ${pu.maxHp}</span><span class="tag">⚔️ ${Math.round(pu.atk)}</span><span class="tag">💨 ${pu.agi}</span>${own ? `<span class="tag">🐾 Bond ${bondLevel(bond)}</span>` : ''}${p.skills.map(id => `<span class="tag">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div></div>
-        <div class="acts">${act ? '<span class="owned">✓ Your partner</span>' : ''}${btn}</div></article>`;
+          <div class="tags"><span class="tag">❤️ ${pu.maxHp}</span><span class="tag">⚔️ ${Math.round(pu.atk)}</span><span class="tag">💨 ${pu.agi}</span>${own ? `<span class="tag">🐾 Bond ${bondLevel(bond)}</span>` : ''}${p.skills.map(id => `<span class="tag">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div>${ctl}</div>
+        <div class="acts">${act ? `<span class="owned">✓ ${you ? 'Your partner' : esc(owner.name) + "'s partner"}</span>` : ''}${btn}</div></article>`;
     }).join('')}</div></section>`;
 }
 /* ---------- Clan Hall ---------- */
@@ -3265,12 +3871,23 @@ function journalScreen(){
 
 /* ============================ BATTLE VIEW ============================ */
 function unitCard(u){
+  const ctl = u.side === 'ally' && (u.isSquad || u.isPet);
   return `<div class="unit ${u.side} ${u.boss ? 'boss' : ''} ${u.isPet ? 'pet' : ''} ${u.isSquad ? 'squad' : ''}" id="u${u.uid}" ${u.side === 'enemy' ? `data-act="target" data-arg="${u.uid}" role="button" aria-label="Target ${esc(u.name)}"` : ''}>
     <div class="statuses"></div>
-    <div class="sprite-wrap"><div class="sprite ${u.side === 'enemy' ? 'flip' : ''}">${spriteSVG(u)}</div><div class="target-mark">▼</div></div>
+    <div class="sprite-wrap"><div class="sprite ${u.side === 'enemy' ? 'flip' : ''}">${spriteSVG(u)}</div><div class="target-mark">▼</div>${ctl ? `<button class="ctl" data-act="ctl" data-arg="${u.uid}" aria-label="Switch who controls ${esc(u.name)}"></button>` : ''}</div>
     <div class="plate"><span class="uname">${ELEMENTS[u.el].icon} ${esc(u.name)}</span><span class="ulv">${u.isPet ? '🐾' : u.isSquad ? '👥' : ''}Lv${u.level}</span></div>
     <div class="bars"><div class="bar hp"><i></i><b></b></div><div class="bar cp"><i></i><b></b></div></div>
   </div>`;
+}
+// Each ninja's pet stands behind it: to the left on your side, to the right on the foe's side.
+function sideHTML(units, foe){
+  const out = [];
+  for(const o of units.filter(u => !u.isPet)){
+    const pets = units.filter(p => p.isPet && p.ownerUid === o.uid);
+    out.push(pets.length ? `<div class="grp">${foe ? unitCard(o) + pets.map(unitCard).join('') : pets.map(unitCard).join('') + unitCard(o)}</div>` : unitCard(o));
+  }
+  for(const p of units.filter(p => p.isPet && !units.some(o => o.uid === p.ownerUid))) out.push(unitCard(p));
+  return out.join('');
 }
 function renderBattle(){
   const m = B.meta;
@@ -3279,9 +3896,9 @@ function renderBattle(){
       <div class="bt-tools"><button class="btn sm ${S.settings.auto ? 'primary' : ''}" data-act="autoB" id="autob" aria-pressed="${!!S.settings.auto}">🤖 Auto</button><button class="btn sm" data-act="soundB" id="sndb" aria-label="Sound">${S.settings.sound ? '🔊' : '🔇'}</button><button class="btn sm" data-act="speedB" id="spd" aria-label="Battle speed">⏩ ${S.settings.speed}×</button></div></div>
     <div class="turnorder" id="turnorder"></div>
     <div class="field">
-      <div class="side ${B.allies.length > 1 ? 'multi' : ''}">${B.allies.map(unitCard).join('')}</div>
+      <div class="side ${B.allies.length > 1 ? 'multi' : ''}">${sideHTML(B.allies, false)}</div>
       <div class="vs">VS</div>
-      <div class="side ${B.enemies.length > 1 ? 'multi' : ''}">${B.enemies.map(unitCard).join('')}</div>
+      <div class="side ${B.enemies.length > 1 ? 'multi' : ''}">${sideHTML(B.enemies, true)}</div>
     </div>
     <div class="bt-log" id="btlog" aria-live="polite"></div>
     <div class="actions" id="actions"></div>
@@ -3295,6 +3912,7 @@ function updateBattle(){
     hp.querySelector('i').style.width = (u.hp / u.maxHp * 100) + '%'; hp.querySelector('b').textContent = `${u.hp}/${u.maxHp}`;
     cp.querySelector('i').style.width = (u.cp / u.maxCp * 100) + '%'; cp.querySelector('b').textContent = `${u.cp}/${u.maxCp} CP`;
     el.querySelector('.statuses').innerHTML = u.statuses.map(x => { const d = STATUSES[x.s]; return `<span class="st ${d.kind}" title="${d.name}: ${d.desc} (${x.dur} turns)">${d.icon}<sub>${x.dur}</sub></span>`; }).join('');
+    const cb = el.querySelector('.ctl'); if(cb){ const ai = u.controller === 'ai'; cb.textContent = ai ? '🤖' : '🎮'; cb.title = ai ? 'On Auto: tap to command it yourself' : 'You command it: tap to put it on Auto'; }
     el.classList.toggle('dead', !u.alive);
     el.classList.toggle('active', B.active === u && !B.over && u.alive);
     el.classList.toggle('targeted', u.side === 'enemy' && B.target === u.uid && u.alive && B.enemies.filter(e => e.alive).length > 0);
@@ -3310,7 +3928,9 @@ function updateBattle(){
 function actionsHTML(){
   const u = B.active, mine = B.awaiting && u && u.controller === 'player' && !B.over;
   const p = u && u.controller === 'player' && u.side === 'ally' ? u : B.allies.find(a => a.isPlayer);
-  const hint = `<div class="turn-hint ${mine ? 'mine' : ''}">${B.over ? 'The battle is over…' : mine ? (u.isPlayer ? 'Your move. Tap a foe to target it, then choose an action.' : `👥 ${esc(u.name)}'s move. You're in command!`) : u ? `${esc(u.name)} is acting…` : 'Get ready…'}</div>`;
+  const hint = `<div class="turn-hint ${mine ? 'mine' : ''}">${B.over ? 'The battle is over…' : mine ? (u.isPlayer ? 'Your move. Tap a foe to target it, then choose an action.' : `${u.isPet ? '🐾' : '👥'} ${esc(u.name)}'s move. You're in command!`) : u ? `${esc(u.name)} is acting…` : 'Get ready…'}</div>`;
+  const helpers = B.allies.filter(a => (a.isSquad || a.isPet) && a.alive);
+  const strip = helpers.length ? `<div class="ctlstrip"><small class="muted">Who plays:</small>${helpers.map(a => `<button class="ctlchip ${a.controller === 'ai' ? 'auto' : ''}" data-act="ctl" data-arg="${a.uid}" title="Tap to switch">${a.isPet ? '🐾' : '👥'} ${esc(a.name)}: ${a.controller === 'ai' ? '🤖 Auto' : '🎮 You'}</button>`).join('')}</div>` : '';
   if(UI.itemPanel && mine){
     const cons = ITEMS.filter(i => i.slot === 'consumable' && S.inventory[i.id] > 0);
     return hint + `<div class="item-panel">${cons.length ? cons.map(i => `<button class="ibtn" data-act="bUse" data-arg="${i.id}">${i.icon} ${i.name} ×${S.inventory[i.id]}<small>${i.desc}</small></button>`).join('') : '<div class="panel empty">No supplies left. Buy some at the Shop.</div>'}
@@ -3318,18 +3938,22 @@ function actionsHTML(){
   }
   const d = mine ? '' : 'disabled', t = getTarget();
   const sk = p.skills.map(id => SKILL[id]).filter(Boolean).map(s => {
-    const raw = p.cds[s.id] || 0, cd = mine ? raw : Math.max(0, raw - 1), can = mine && cd <= 0 && p.cp >= s.cp;
-    const em = s.power && t ? elemMult(s.el, t.el) : 1;
-    return `<button class="sbtn ${cd > 0 ? 'oncd' : ''}" style="--c:${ELEMENTS[s.el].color}" data-act="bSkill" data-arg="${s.id}" ${can ? '' : 'disabled'} title="${esc(s.desc)}">
-      <span class="si">${s.icon}</span><span class="sn">${s.name}</span><span class="sc">${s.cp} CP</span><span class="stg">${skillTags(s).slice(0, 2).join(', ')}</span>
+    const raw = p.cds[s.id] || 0, cd = mine ? raw : Math.max(0, raw - 1), can = mine && cd <= 0 && canUse(p, s), hc = hpCostOf(p, s);
+    const em = s.power && t ? elemMult(s.el, t.el) : 1, dmg = s.power ? previewDamage(p, s, t) : 0;
+    const fx = skillTags(s).filter(x => !/power$/.test(x) && !/^Ally$|^All foes$/.test(x)), allx = s.target === 'allEnemies';
+    const line = [dmg ? `≈${dmg}${s.hits > 1 ? ' total' : ''}${allx ? ' each' : ''} dmg` : '', ...fx].filter(Boolean).slice(0, 3).join(' · ');
+    const why = mine && !can && cd <= 0 ? whyNot(p, s) : '';
+    return `<button class="sbtn ${cd > 0 ? 'oncd' : ''}" style="--c:${skillColor(s)}" data-act="bSkill" data-arg="${s.id}" ${can ? '' : 'disabled'} title="${esc(s.desc)}${why ? ' (' + why + ')' : ''}">
+      <span class="si">${s.icon}</span><span class="sn">${s.name}</span><span class="sc">${skillCost(p, s)} CP${hc ? ` · ${hc} HP` : ''} · CD ${s.cd}</span><span class="stg">${line}</span>
       ${em > 1 ? '<span class="em up" title="Strong against target">▲</span>' : em < 1 ? '<span class="em down" title="Weak against target">▼</span>' : ''}
       ${cd > 0 ? `<span class="cdv" aria-label="${cd} turns">${cd}</span>` : ''}</button>`;
   }).join('');
-  return hint + `<div class="act-row">
-      <button class="abtn main" data-act="bAttack" ${d}><span class="ai">🗡️</span>Attack</button>
-      <button class="abtn" data-act="bCharge" ${d}><span class="ai">🌀</span>Charge</button>
-      <button class="abtn" data-act="bItems" ${d}><span class="ai">🎒</span>Item</button>
-      <button class="abtn" data-act="bFlee" ${d}><span class="ai">🏳️</span>Retreat</button>
+  const basicDmg = t ? previewDamage(p, BASIC, t) : 0;
+  return hint + strip + `<div class="act-row">
+      <button class="abtn main" data-act="bAttack" ${d} title="A plain strike: free, no cooldown, but weaker than any technique."><span class="ai">🗡️</span>Attack<small>≈${basicDmg} dmg</small></button>
+      <button class="abtn" data-act="bCharge" ${d} title="Spend this turn gathering Chakra, and brace: Guard (35% less damage) until your next turn."><span class="ai">🌀</span>Charge<small>+${chargeGain(p)} CP · Guard</small></button>
+      <button class="abtn" data-act="bItems" ${d}><span class="ai">🎒</span>Item<small>Supplies</small></button>
+      <button class="abtn" data-act="bFlee" ${d}><span class="ai">🏳️</span>Retreat<small>Leave</small></button>
     </div><div class="skillbar">${sk || '<div class="muted">No techniques equipped. Visit the Academy.</div>'}</div>`;
 }
 
@@ -3455,13 +4079,27 @@ const ACT = {
   srvForget: a => { lsSet(SERVERS_KEY, lsGet(SERVERS_KEY, []).filter(x => x.url !== a)); render(); },
   commClaim: a => { const i = +a, g = COMMUNITY_GOALS[i], ev = S.event; ev.commClaimed = ev.commClaimed || []; if(ev.commClaimed.includes(i) || raidTotals().total < g.pct) return; ev.commClaimed.push(i); S.shards += g.shards; persist(); render(); toast(`+${g.shards} Moon Shards`); },
   petBuy: a => {
-    const p = PET[a], c = S.char; if(!p || c.pets.includes(a)) return;
-    if(c.level < p.lvl) return toast(`Requires level ${p.lvl}`);
+    const [who, id] = splitArg(a), p = PET[id], c = S.char, o = ninjaById(who); if(!p || !o || o.pets.includes(id)) return;
+    if(o.level < p.lvl) return toast(`Requires level ${p.lvl}`);
     if(p.shards){ if(S.shards < p.shards) return toast('Not enough Moon Shards'); S.shards -= p.shards; }
     else { if(c.gold < p.price) return toast('Not enough gold'); c.gold -= p.price; }
-    c.pets.push(a); c.pet = a; persist(); render(); toast(`${p.name} joins you!`);
+    o.pets.push(id); o.pet = id; persist(); render(); toast(`${p.name} joins ${o === c ? 'you' : o.name}!`);
   },
-  petSet: a => { S.char.pet = a || null; persist(); render(); toast(a ? `${PET[a].name} will fight beside you` : 'Your pet stays home'); },
+  petSet: a => { const [who, id] = splitArg(a), o = ninjaById(who); if(!o) return; o.pet = id || null; persist(); render(); toast(id ? `${PET[id].name} will fight behind ${o === S.char ? 'you' : o.name}` : 'The pet stays home'); },
+  petCtl: a => { const [who, v] = splitArg(a), o = ninjaById(who); if(!o) return; o.petAuto = v === '1'; persist(); render(); toast(o.petAuto ? 'The pet fights on Auto' : 'You will command the pet'); },
+  ctl: a => { if(!B) return; const u = allUnits().find(x => x.uid === +a); if(!u) return; setAuto(u, u.controller === 'player'); persist(); updateBattle(); },
+  bestLoadout: a => tryDo(() => { const c = ninjaById(a); autoLoadout(c); return `Loadout set: ${c.loadout.map(id => SKILL[id].name).join(', ')}`; }),
+  talent: a => tryDo(() => { const [who, tier, id] = a.split(':'); return pickTalent(ninjaById(who), +tier, id); }),
+  talentAuto: a => tryDo(() => { const c = ninjaById(a), n = talentsUnpicked(c); if(!n) throw new Error('Every unlocked tier already has a talent'); c.talents = autoTalents(c, true); return `Picked ${n} talent${n > 1 ? 's' : ''}`; }),
+  optMe: () => tryDo(() => summarize(optimizeTeam('leader'))),
+  gearMe: () => tryDo(() => { const got = applyGearPlan(gearPlan([S.char], Math.floor(S.char.gold * 0.9)).plan); return got.length ? 'Equipped: ' + got.join(', ') : 'Already well equipped for your budget'; }),
+  gearTeam: () => tryDo(() => { const got = applyGearPlan(gearPlan(teamNinja(), Math.floor(S.char.gold * 0.9)).plan); return got.length ? 'Equipped: ' + got.join(', ') : 'Everyone is already well equipped'; }),
+  custom: a => { UI.custWho = a || 'leader'; go('custom'); },
+  custBack: () => { if(UI.custWho && UI.custWho !== 'leader'){ UI.recruitId = UI.custWho; go('recruit'); } else go('character'); },
+  lookSet: a => { const [k, v] = splitArg(a), c = ninjaById(UI.custWho); if(!c) return; applyLook(c, k, v); persist(); publishEcho(); render(); },
+  lookRandom: () => { const c = ninjaById(UI.custWho); if(!c) return; const r = a => a[Math.floor(Math.random() * a.length)];
+    Object.assign(c.look, {gender:r(['m', 'f']), hairStyle:r(HAIR_STYLES).id, hair:r(HAIR_COLORS), outfit:r(OUTFIT_COLORS), eyes:r(EYE_COLORS), skin:r(SKIN_TONES), bandColor:r(BAND_COLORS)}); persist(); publishEcho(); render(); },
+  renameApply: () => { const c = ninjaById(UI.custWho), v = (($('#cust-name') || {}).value || '').trim().slice(0, 16); if(!c) return; if(!v) return toast('A ninja needs a name'); c.name = v; persist(); publishEcho(); presence(); render(); toast(`Now called ${v}`); },
   clanJoin: a => {
     const cl = CLAN[a], c = S.char, cost = c.clan ? 500 : 200;
     if(c.level < cl.lvl) return toast(`Requires level ${cl.lvl}`);
@@ -3490,7 +4128,7 @@ const ACT = {
     }catch(e){ toast(e instanceof SyntaxError ? 'That text is not valid JSON.' : e.message); }
   },
   copyBuild: () => {
-    const c = S.char, build = JSON.stringify({name:c.name, element:c.element, level:c.level, look:c.look, alloc:c.alloc, equip:c.equip, skills:c.skills, loadout:c.loadout, pets:c.pet ? [c.pet] : [], pet:c.pet, bond:c.pet ? {[c.pet]:c.bond[c.pet] || 0} : {}, clan:c.clan});
+    const c = S.char, build = JSON.stringify(Object.assign(buildOf(c), {squad:activeSquad().map(r => Object.assign(buildOf(r), {clan:null}))}));
     const ta = $('#ghostin');
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(build).then(() => toast('Build copied. Send it to a friend!'), () => { ta.value = build; ta.select(); toast('Copy the build from the box'); });
     else { ta.value = build; ta.select(); toast('Copy the build from the box'); }
@@ -3515,13 +4153,22 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-act][role="button"]')){ e.preventDefault(); e.target.dispatchEvent(new MouseEvent('click', {bubbles:true})); }
 });
+document.addEventListener('change', e => { if(e.target.dataset && e.target.dataset.look){ persist(); publishEcho(); render(); } });
 document.addEventListener('keydown', e => {
   if(e.key !== 'Enter') return;
+  if(e.target.id === 'cust-name'){ e.preventDefault(); ACT.renameApply(); }
   if(e.target.id === 'g-input'){ e.preventDefault(); ACT.guideSend(); }
   if(e.target.id === 'shout-in'){ e.preventDefault(); ACT.shout(); }
   if(e.target.id === 'srv-in'){ e.preventDefault(); ACT.srvAdd(); }
 });
+function applyLook(c, k, v){
+  if(k === 'band'){ if(v === 'none') c.look.band = 'none'; else delete c.look.band; }
+  else if(k === 'mask'){ if(v === 'none') delete c.look.mask; else c.look.mask = v; }
+  else c.look[k] = v;
+}
 document.addEventListener('input', e => {
+  const k = e.target.dataset && e.target.dataset.look;
+  if(k){ const c = ninjaById(UI.custWho); if(c){ applyLook(c, k, e.target.value); const pv = $('.preview-sprite'); if(pv) pv.innerHTML = ninjaSVG(c.look, gearLooks(c), {scarf:ELEMENTS[c.element].color}); } return; }
   if(e.target.id === 'cname'){ UI.create.name = e.target.value; const p = $('.preview-name'); if(p) p.textContent = e.target.value || 'Your name'; }
 });
 

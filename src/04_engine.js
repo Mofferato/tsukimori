@@ -22,7 +22,7 @@ function newCharacter(cr){
     look:{gender:cr.gender, hairStyle:cr.hairStyle, hair:cr.hair, outfit:cr.outfit, eyes:cr.eyes, skin:cr.skin},
     level:1, xp:0, gold:120, points:0, alloc:{hp:0, cp:0, agi:0},
     equip:{weapon:'kunai_train', clothing:null, back:null, accessory:null},
-    skills:[first], loadout:[first], pets:[], pet:null, bond:{}, clan:null};
+    skills:[first], loadout:[first], pets:[], pet:null, bond:{}, clan:null, talents:blankTalents(), petAuto:true};
 }
 /* ---- Save slots ----
    Each ninja lives in its own slot. The index lists them for the title and Save screens; the first
@@ -84,6 +84,8 @@ function normChar(o){
   c.loadout = (c.loadout || []).filter(id => c.skills.includes(id)).slice(0, MAX_LOADOUT);
   c.pets = (c.pets || []).filter(id => PET[id]);
   if(c.pet && !c.pets.includes(c.pet)) c.pet = null;
+  c.petAuto = o.petAuto !== false; c.auto = !!o.auto;
+  c.talents = blankTalents().map((_, i) => { const id = (o.talents || [])[i]; return TALENT[id] && TALENT[id].tier === i ? id : null; });
   c.bond = Object.assign({}, o.bond || {});
   if(c.clan && !CLAN[c.clan.id]) c.clan = null;
   c.squad = Array.isArray(o.squad) ? o.squad.slice(0, MAX_SQUAD).map(x => Object.assign(normChar(Object.assign({}, x, {squad:[]})), {squad:[]})) : [];
@@ -111,7 +113,7 @@ function migrate(o){
   s.squad.active = (s.squad.active || []).filter(id => s.squad.roster.some(r => r.id === id)).slice(0, MAX_SQUAD);
   s.squad.pool = (s.squad.pool || []).map(r => Object.assign(normChar(r), {squad:[]}));
   s.squad.roster.forEach(r => { r.autoTech = r.autoTech !== false; learnNewTechs(r); }); // older saves: catch recruits up on techniques they've outgrown
-  s.version = 4;
+  s.version = 5;
   return s;
 }
 function addInv(id, n){ S.inventory[id] = (S.inventory[id] || 0) + n; if(S.inventory[id] <= 0) delete S.inventory[id]; }
@@ -139,15 +141,33 @@ function gearBonus(c){
   return g;
 }
 function charStats(c){
-  const g = gearBonus(c), cb = clanBonus(c);
-  const agi = Math.round((5 + c.level + c.alloc.agi * 2 + g.agi) * (1 + (cb.agiPct || 0)));
-  return {maxHp:Math.round((90 + c.level * 12 + c.alloc.hp * 10 + g.hp) * (1 + (cb.hpPct || 0))),
-          maxCp:Math.round((40 + c.level * 5 + c.alloc.cp * 6 + g.cp) * (1 + (cb.cpPct || 0))),
-          agi, atk:Math.round((8 + c.level * 2 + g.atk) * (1 + (cb.atkPct || 0))),
-          crit:Math.min(50, 5 + agi * 0.15 + g.crit + (cb.crit || 0)), dodge:g.dodge + (cb.dodge || 0),
-          elem:cb.elem || null, elemPct:cb.elemPct || 0, g};
+  const g = gearBonus(c), cb = clanBonus(c), tb = talentBonus(c), P = k => 1 + (cb[k] || 0) + (tb[k] || 0);
+  const agi = Math.round((5 + c.level + c.alloc.agi * 2 + g.agi) * P('agiPct'));
+  return {maxHp:Math.round((90 + c.level * 12 + c.alloc.hp * 10 + g.hp) * P('hpPct')),
+          maxCp:Math.round((40 + c.level * 5 + c.alloc.cp * 6 + g.cp) * P('cpPct')),
+          agi, atk:Math.round((8 + c.level * 2 + g.atk) * P('atkPct')),
+          crit:Math.min(50, 5 + agi * 0.15 + g.crit + (cb.crit || 0) + (tb.crit || 0)), dodge:g.dodge + (cb.dodge || 0) + (tb.dodge || 0),
+          elem:cb.elem || null, elemPct:cb.elemPct || 0, g, tb};
 }
-function skillPrice(s){ return s.el === S.char.element ? s.price : s.price * 2; }
+// Talents: one pick per tier (see TALENTS). Everything they grant is summed into one bag.
+const blankTalents = () => TALENT_TIERS.map(() => null);
+function talentBonus(c){
+  const o = {dmgType:{}, opening:[]}, lv = c.level || 1;
+  (c.talents || []).forEach((id, i) => {
+    const t = TALENT[id]; if(!t || t.tier !== i || lv < TALENT_TIERS[i]) return;
+    for(const k in t.fx){
+      const v = t.fx[k];
+      if(k === 'dmgType') for(const ty in v) o.dmgType[ty] = (o.dmgType[ty] || 0) + v[ty];
+      else if(k === 'opening') o.opening.push(...v);
+      else o[k] = (o[k] || 0) + v;
+    }
+  });
+  return o;
+}
+const tv = (u, k) => (u.t && u.t[k]) || 0;
+// Off-element ninjutsu costs double; the other technique families are element-free, so they cost the same for everyone.
+function skillPrice(s, c){ c = c || S.char; return s.type === 'ninjutsu' && s.el !== c.element ? s.price * 2 : s.price; }
+const skillColor = s => s.el ? ELEMENTS[s.el].color : TECH_TYPES[s.type || 'ninjutsu'].color;
 function skillTags(s){
   const t = [];
   if(s.power) t.push(`${s.hits > 1 ? s.hits + '×' : ''}${Math.round(s.power * 100)}% power`);
@@ -157,7 +177,10 @@ function skillTags(s){
   if(s.cpRestore) t.push(`+${Math.round(s.cpRestore * 100)}% CP`);
   if(s.cleanse) t.push('Cleanse');
   if(s.critBonus) t.push(`+${s.critBonus}% crit`);
-  (s.apply || []).forEach(a => { const st = STATUSES[a.s]; t.push(`${st.icon} ${st.name}${a.chance < 1 ? ' ' + Math.round(a.chance * 100) + '%' : ''}${a.on === 'self' ? ' (self)' : ''}`); });
+  if(s.pierce) t.push('Ignores Guard');
+  if(s.leech) t.push(`Steals ${Math.round(s.leech * 100)}%`);
+  if(s.hpCost) t.push(`☠️ −${Math.round(s.hpCost * 100)}% HP`);
+  (s.apply || []).forEach(a => { const st = STATUSES[a.s]; t.push(`${st.icon} ${st.name}${a.chance < 1 ? ' ' + Math.round(a.chance * 100) + '%' : ''}${a.on === 'self' || (s.target === 'self') ? ' (self)' : ''}`); });
   return t;
 }
 function missionXp(m){ return m.xp != null ? m.xp : Math.round(xpToNext(m.lvl) * 0.3); }
@@ -170,9 +193,15 @@ function unitFromChar(c, controller = 'player', side = 'ally'){
   const st = charStats(c);
   return mkUnit({name:c.name, side, controller, isPlayer:controller === 'player', el:c.element, level:c.level,
     maxHp:st.maxHp, maxCp:st.maxCp, agi:st.agi, atk:st.atk, crit:st.crit, dodge:st.dodge, elemBoost:st.elem, elemPct:st.elemPct,
-    skills:[...c.loadout], kind:'ninja', look:Object.assign({}, c.look, {scarf:ELEMENTS[c.element].color}), gear:gearLooks(c)});
+    skills:[...c.loadout], kind:'ninja', look:Object.assign({}, c.look, {scarf:ELEMENTS[c.element].color}), gear:gearLooks(c), t:st.tb});
 }
-function enemyStats(L){ return {hp:48 + 15 * L + 0.12 * L * L, atk:5 + 1.9 * L + 0.012 * L * L, agi:4 + 0.9 * L, cp:30 + 4 * L}; }
+// Foes are tuned against the technique rules above (stronger techniques, free Chakra regen, Charge guards): ENEMY_HP/ENEMY_ATK keep
+// fights the same length as before. They ramp in over the first ten levels so a brand-new ninja with one technique isn't punished.
+const ENEMY_HP = 1.3, ENEMY_ATK = 1.1;
+function enemyStats(L){
+  const k = clamp((L - 1) / 9, 0, 1), hm = 1 + (ENEMY_HP - 1) * k, am = 1 + (ENEMY_ATK - 1) * k;
+  return {hp:(48 + 15 * L + 0.12 * L * L) * hm, atk:(5 + 1.9 * L + 0.012 * L * L) * am, agi:4 + 0.9 * L, cp:30 + 4 * L};
+}
 function unitFromEnemy(id, lvl){
   const d = ENEMY[id], b = enemyStats(lvl);
   return mkUnit({name:d.name, side:'enemy', controller:'ai', el:d.el, level:lvl,
@@ -184,7 +213,7 @@ function unitFromEnemy(id, lvl){
 // Pets fight on their owner's side under AI control; stats scale from the owner and bond level.
 function unitFromPet(pid, ownerStats, side, bond, level){
   const p = PET[pid], m = 1 + 0.06 * (bondLevel(bond) - 1);
-  return mkUnit({name:p.name, side, controller:'ai', isPet:true, el:p.el, level,
+  return mkUnit({name:p.name, side, controller:'ai', isPet:true, petId:pid, el:p.el, level,
     maxHp:Math.round(ownerStats.maxHp * 0.45 * p.hpM * m), maxCp:40 + level * 3, agi:Math.round(ownerStats.agi * 0.9 * p.agiM),
     atk:Math.round(ownerStats.atk * 0.55 * p.atkM * m * 10) / 10, crit:8, dodge:0, skills:[...p.skills], kind:p.kind, look:p.look});
 }
@@ -192,8 +221,11 @@ function unitFromPet(pid, ownerStats, side, bond, level){
 function ghostTeam(g){
   const u = unitFromChar(g, 'ai', 'enemy'); u.isGhost = true;
   const team = [u];
-  for(const m of (g.squad || []).slice(0, MAX_SQUAD)){ const su = unitFromChar(Object.assign({}, m, {clan:g.clan}), 'ai', 'enemy'); su.isGhost = true; team.push(su); }
-  if(g.pet && PET[g.pet]) team.push(unitFromPet(g.pet, charStats(g), 'enemy', (g.bond || {})[g.pet] || 0, g.level));
+  const addPet = (ch, owner) => { if(ch.pet && PET[ch.pet]){ const pu = unitFromPet(ch.pet, charStats(ch), 'enemy', (ch.bond || {})[ch.pet] || 0, ch.level); pu.ownerUid = owner.uid; team.push(pu); } };
+  addPet(g, u);
+  for(const m of (g.squad || []).slice(0, MAX_SQUAD)){
+    const mm = Object.assign({}, m, {clan:g.clan}), su = unitFromChar(mm, 'ai', 'enemy'); su.isGhost = true; team.push(su); addPet(mm, su);
+  }
   return team;
 }
 function unitFromGhost(ghostChar){ return ghostTeam(normChar(ghostChar))[0]; }
@@ -215,18 +247,21 @@ function makeGhost(level, squadN = 0){
     const opts = ITEMS.filter(i => i.slot === sl && i.lvl <= level && !i.shards).sort((a, b) => b.lvl - a.lvl).slice(0, 2);
     g.equip[sl] = opts.length && Math.random() < 0.9 ? pick(opts).id : null;
   }
-  const own = SKILLS.filter(s => s.el === el && s.lvl <= level && !s.enemyOnly && !s.petOnly).slice(-5);
-  const off = SKILLS.filter(s => s.el !== el && s.lvl <= level && !s.enemyOnly && !s.petOnly);
+  const real = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl <= level);
+  const own = real.filter(s => s.el === el).slice(-5);
+  const off = real.filter(s => s.el && s.el !== el), free = real.filter(s => !s.el);
   g.skills = own.map(s => s.id); if(off.length && level >= 5) g.skills.push(pick(off).id);
+  if(free.length && level >= 3) for(const s of [...free].sort(() => Math.random() - 0.5).slice(0, 2)) g.skills.push(s.id);
   g.loadout = g.skills.slice(0, MAX_LOADOUT);
   const pets = PETS.filter(p => p.lvl <= level && !p.shards);
   if(pets.length && Math.random() < 0.55){ g.pet = pick(pets).id; g.pets = [g.pet]; g.bond[g.pet] = Math.floor(Math.random() * level); }
   if(level >= 5 && Math.random() < 0.6){ const cl = pick(CLANS.filter(c => c.lvl <= level)); g.clan = {id:cl.id, rep:Math.floor(Math.random() * level * 20)}; }
-  g.squad = Array.from({length:squadN}, () => { const m = makeGhost(Math.max(1, level - Math.floor(Math.random() * 3)), 0); m.pet = null; m.pets = []; m.clan = null; return m; });
+  g.talents = autoTalents(g);
+  g.squad = Array.from({length:squadN}, () => { const m = makeGhost(Math.max(1, level - Math.floor(Math.random() * 3)), 0); m.clan = null; if(!(m.pet && Math.random() < 0.5)){ m.pet = null; m.pets = []; } return m; });
   return normChar(g);
 }
 function soloPower(c){ const s = charStats(c); return Math.round(s.maxHp * 0.25 + s.atk * 3 + s.agi * 2 + s.maxCp * 0.2 + c.loadout.length * 8); }
-function buildPower(c, squad){ const sq = squad || c.squad || []; return soloPower(c) + (c.pet ? 25 : 0) + sq.reduce((a, m) => a + Math.round(soloPower(m) * 0.8), 0); }
+function buildPower(c, squad){ const sq = squad || c.squad || []; return soloPower(c) + (c.pet ? 25 : 0) + sq.reduce((a, m) => a + Math.round(soloPower(m) * 0.8) + (m.pet ? 20 : 0), 0); }
 function refreshArena(){ const L = S.char.level, n = activeSquad().length; S.arena.opps = [-1, 0, 1].map(d => Object.assign(makeGhost(L + d, n), {diff:d})); persist(); }
 
 /* ============================ BATTLE ENGINE ============================ */
@@ -236,16 +271,25 @@ const effAgi = u => u.agi * (hasStatus(u, 'slow') ? 0.6 : 1) * (hasStatus(u, 'ha
 const opponents = u => (u.side === 'ally' ? B.enemies : B.allies).filter(x => x.alive);
 const friends = u => (u.side === 'ally' ? B.allies : B.enemies).filter(x => x.alive);
 const allUnits = () => [...B.allies, ...B.enemies];
-function dodgeChance(att, def){ return clamp(5 + (effAgi(def) - effAgi(att)) * 1.2 + (def.dodge || 0) + (hasStatus(def, 'haste') ? 10 : 0), 3, 45); }
+function dodgeChance(att, def){ return clamp(5 + (effAgi(def) - effAgi(att)) * 1.2 + (def.dodge || 0) + (hasStatus(def, 'haste') ? 10 : 0) + (hasStatus(def, 'evasion') ? 25 : 0) + (hasStatus(att, 'blind') ? 30 : 0), 3, 60); }
 function log(msg){ if(!B) return; B.log.push(msg); if(B.log.length > 40) B.log.shift(); }
 const mostWounded = u => friends(u).reduce((a, b) => (a.hp / a.maxHp <= b.hp / b.maxHp ? a : b));
 
-// Your side: leader + active squadmates (you control them too) + pet (AI). Squadmates share the leader's clan perks.
+// Your side: leader + active squadmates (you control them, or the AI does) and each ninja's own pet, which stands behind its owner.
+// Squadmates share the leader's clan perks.
 function playerTeam(carry){
-  const c = S.char, st = charStats(c), p = unitFromChar(c); p.key = 'leader';
-  const team = [p];
-  for(const r of activeSquad()){ const u = unitFromChar(Object.assign({}, r, {clan:c.clan}), 'player', 'ally'); u.isPlayer = false; u.isSquad = true; u.key = r.id; team.push(u); }
-  if(c.pet && PET[c.pet]){ const pu = unitFromPet(c.pet, st, 'ally', c.bond[c.pet] || 0, c.level); pu.key = 'pet'; team.push(pu); }
+  const c = S.char, team = [];
+  const addPet = (ch, owner, key) => {
+    if(!(ch.pet && PET[ch.pet])) return;
+    const pu = unitFromPet(ch.pet, charStats(ch), 'ally', (ch.bond || {})[ch.pet] || 0, ch.level);
+    pu.key = key === 'leader' ? 'pet' : 'pet:' + key; pu.owner = key; pu.ownerUid = owner.uid; pu.controller = ch.petAuto === false ? 'player' : 'ai';
+    team.push(pu);
+  };
+  const p = unitFromChar(c); p.key = 'leader'; team.push(p); addPet(c, p, 'leader');
+  for(const r of activeSquad()){
+    const m = Object.assign({}, r, {clan:c.clan}), u = unitFromChar(m, r.auto ? 'ai' : 'player', 'ally');
+    u.isPlayer = false; u.isSquad = true; u.key = r.id; team.push(u); addPet(m, u, r.id);
+  }
   if(carry) for(const u of team){ const k = carry[u.key]; if(k){ u.hp = clamp(k.hp, 1, u.maxHp); u.cp = clamp(k.cp, 0, u.maxCp); } }
   return team;
 }
@@ -258,8 +302,8 @@ function startMission(id){
 function startStage(){
   if(RUN.kind === 'mission'){
     const m = MISSION[RUN.id], st = m.stages[RUN.stage];
-    const foes = st.foes.map(([id, l]) => unitFromEnemy(id, l)), n = activeSquad().length;
-    if(n) foes.forEach(e => { e.maxHp = e.hp = Math.round(e.maxHp * (1 + 0.45 * n)); e.atk = Math.round(e.atk * (1 + 0.12 * n) * 10) / 10; }); // bigger squad, tougher foes
+    const foes = st.foes.map(([id, l]) => unitFromEnemy(id, l)), sq = activeSquad(), n = sq.length, np = sq.filter(r => r.pet && PET[r.pet]).length;
+    if(n) foes.forEach(e => { e.maxHp = e.hp = Math.round(e.maxHp * (1 + 0.45 * n + 0.15 * np)); e.atk = Math.round(e.atk * (1 + 0.12 * n + 0.04 * np) * 10) / 10; }); // bigger squad, tougher foes
     startBattle(playerTeam(RUN.carry), foes, {title:m.name, stage:RUN.stage + 1, stages:m.stages.length, boss:!!st.boss});
   } else if(RUN.kind === 'arena'){
     startBattle(playerTeam(null), ghostTeam(RUN.ghost), {title:`Echo Arena: ${RUN.ghost.name}`, stage:1, stages:1, sub:RUN.ghost.archetype || 'Ghost build'});
@@ -272,7 +316,8 @@ function startBattle(allies, enemies, meta){
   UI.screen = 'battle'; UI.itemPanel = false;
   closeModal(); render(); window.scrollTo(0, 0);
   log(`${meta.boss ? '⚠️ Boss battle! ' : ''}${enemies.map(e => `<b>${esc(e.name)}</b>`).join(', ')} ${enemies.length > 1 ? 'appear' : 'appears'}!`);
-  if(allies.find(a => a.isPet)) log(`🐾 ${esc(allies.find(a => a.isPet).name)} fights at your side.`);
+  const pets = allies.filter(a => a.isPet); if(pets.length) log(`🐾 ${pets.map(p => esc(p.name)).join(', ')} ${pets.length > 1 ? 'fight' : 'fights'} at your side.`);
+  for(const u of [...allies, ...enemies]) for(const [st, dur] of (u.t && u.t.opening) || []) applyStatus(u, st, dur, 0, u);
   updateBattle();
   emit('battleStart', B);
   later(beginRound, 700);
@@ -300,19 +345,22 @@ function nextTurn(){
   startOfTurn(u);
   updateBattle();
   if(!u.alive){ later(nextTurn, 800); return; }
-  if(hasStatus(u, 'stun')){
-    log(`💫 <b>${esc(u.name)}</b> is stunned and can't move!`); float(u, 'Stunned', 'fl-status fl-debuff');
+  if(hasStatus(u, 'stun') || hasStatus(u, 'sleep')){
+    const asleep = !hasStatus(u, 'stun');
+    log(asleep ? `😴 <b>${esc(u.name)}</b> is fast asleep!` : `💫 <b>${esc(u.name)}</b> is stunned and can't move!`); float(u, asleep ? 'Asleep' : 'Stunned', 'fl-status fl-debuff');
     endOfTurn(u); updateBattle(); later(nextTurn, 950); return;
   }
-  if(u.controller === 'player'){ B.awaiting = true; if(!opponents(u).find(e => e.uid === B.target)) retarget(); updateBattle(); if(S.settings.auto) later(autoAct, 500); else if(u.isSquad) sfx('click'); }
+  if(u.controller === 'player'){ B.awaiting = true; if(!opponents(u).find(e => e.uid === B.target)) retarget(); updateBattle(); if(S.settings.auto) later(autoAct, 500); else if(u.isSquad || u.isPet) sfx('click'); }
   else later(() => { B.fseq = 0; aiAct(u); endOfTurn(u); updateBattle(); later(nextTurn, 850); }, 650);
 }
 function startOfTurn(u){
   u.turns++;
   for(const k in u.cds) if(u.cds[k] > 0) u.cds[k]--;
+  const reg = Math.round(u.maxCp * (CP_REGEN + tv(u, 'cpRegen'))); if(reg > 0) u.cp = Math.min(u.maxCp, u.cp + reg);
+  if(tv(u, 'hpRegen')) heal(u, Math.max(1, Math.round(u.maxHp * tv(u, 'hpRegen'))));
   for(const st of [...u.statuses]){
     if(!u.alive) break;
-    if(st.s === 'burn' || st.s === 'bleed'){ dealDamage(u, st.val, {cls:'fl-' + st.s}); log(`${STATUSES[st.s].icon} ${esc(u.name)} takes ${st.val} ${st.s} damage.`); }
+    if(st.s === 'burn' || st.s === 'bleed'){ dealDamage(u, st.val, {cls:'fl-' + st.s, dot:true}); log(`${STATUSES[st.s].icon} ${esc(u.name)} takes ${st.val} ${st.s} damage.`); }
     else if(st.s === 'regen') heal(u, Math.max(1, Math.round(st.val * u.maxHp)));
   }
 }
@@ -320,6 +368,22 @@ function endOfTurn(u){ u.statuses.forEach(x => x.dur--); u.statuses = u.statuses
 function retarget(){ const n = B.enemies.find(e => e.alive); if(n) B.target = n.uid; }
 function getTarget(){ return B.enemies.find(e => e.uid === B.target && e.alive) || B.enemies.find(e => e.alive); }
 
+/* ---- technique rules: cost, cooldown and whether a move can be used right now ---- */
+function skillCost(u, s){ return s.cp ? Math.max(1, Math.round(s.cp * (1 - Math.min(0.5, tv(u, 'cpCut'))))) : 0; }
+function hpCostOf(u, s){ return s.hpCost ? Math.max(1, Math.round(u.maxHp * s.hpCost * (1 - tv(u, 'hpCostCut')))) : 0; }
+const skillCd = (u, s) => s.cd >= 2 ? Math.max(1, s.cd - tv(u, 'cdCut')) : s.cd;
+const canUse = (u, s) => (u.cds[s.id] || 0) <= 0 && u.cp >= skillCost(u, s) && !hasStatus(u, 'silence') && (!s.hpCost || u.hp > hpCostOf(u, s) + 1);
+function whyNot(u, s){
+  if((u.cds[s.id] || 0) > 0) return 'Still on cooldown';
+  if(hasStatus(u, 'silence')) return 'Silenced: no techniques this turn';
+  if(u.cp < skillCost(u, s)) return 'Not enough Chakra. Try Charge.';
+  if(s.hpCost && u.hp <= hpCostOf(u, s) + 1) return 'Too wounded to pay the health cost';
+  return '';
+}
+const chargeGain = u => Math.round(u.maxCp * CHARGE.cp) + CHARGE.flat;
+const BASIC = {id:'basic', type:'basic', el:null, power:BASIC_POWER, hits:1, cp:0, cd:0, target:'enemy', apply:[]};
+
+/* ---- damage ---- */
 function attack(att, def, o){
   let landed = false;
   for(let i = 0; i < (o.hits || 1); i++){
@@ -330,23 +394,35 @@ function attack(att, def, o){
     let d = att.atk * o.power * rand(0.9, 1.1);
     const em = elemMult(o.el, def.el); d *= em;
     if(o.el && att.elemBoost === o.el) d *= 1 + att.elemPct;
+    d *= 1 + tv(att, 'dmg') + ((att.t && att.t.dmgType && att.t.dmgType[o.type]) || 0);
     if(hasStatus(att, 'empower')) d *= 1.3;
+    if(hasStatus(att, 'frenzy')) d *= 1.5;
     if(hasStatus(att, 'weaken')) d *= 0.75;
-    if(hasStatus(def, 'guard')) d *= 0.65;
+    if(hasStatus(def, 'guard') && !o.pierce) d *= 0.65;
     if(hasStatus(def, 'expose')) d *= 1.25;
-    const crit = Math.random() * 100 < att.crit + (o.critBonus || 0);
-    if(crit) d *= 1.5;
+    if(hasStatus(def, 'frenzy')) d *= 1.2;
+    if(def.hp < def.maxHp * 0.3) d *= 1 + tv(att, 'execute');
+    if(att.hp < att.maxHp * 0.35) d *= 1 + tv(att, 'lastStand');
+    const crit = Math.random() * 100 < att.crit + (o.critBonus || 0) + (hasStatus(att, 'focus') ? 25 : 0);
+    if(crit) d *= 1.5 + tv(att, 'critDmg');
     d = Math.max(1, Math.round(d));
     dealDamage(def, d, {crit, em});
     if(att.side === 'ally' && att.controller === 'player'){ if(crit) S.counters.crits++; if(em > 1) S.counters.strong++; }
     log(`${esc(att.name)} hits ${esc(def.name)} for <b>${d}</b>${crit ? ' — critical!' : ''}${em > 1 ? ' (strong element)' : em < 1 ? ' (weak element)' : ''}`);
+    const back = (hasStatus(att, 'vamp') ? 0.35 : 0) + tv(att, 'lifesteal') + (o.leech || 0);
+    if(back && att.alive) heal(att, Math.max(1, Math.round(d * back)));
     landed = true;
   }
   return landed;
 }
 function dealDamage(u, d, o = {}){
   if(!u.alive) return;
+  if(d >= u.hp && tv(u, 'undying') && !u.usedUndying){ // Second Wind: refuse to fall, once
+    u.usedUndying = true; d = u.hp - 1; float(u, '🌙 Second Wind', 'fl-status fl-buff'); log(`🌙 <b>${esc(u.name)}</b> refuses to fall!`);
+    u.hp = Math.max(1, u.hp - d); heal(u, Math.round(u.maxHp * 0.3)); return;
+  }
   u.hp = Math.max(0, u.hp - d);
+  if(!o.dot && hasStatus(u, 'sleep')) u.statuses = u.statuses.filter(x => x.s !== 'sleep');
   const cls = ['fl-dmg', o.crit ? 'fl-crit' : '', o.cls || '', o.em > 1 ? 'fl-strong' : o.em < 1 ? 'fl-weak' : ''].join(' ');
   const dl = float(u, `-${d}${o.crit ? '!' : ''}${o.em > 1 ? ' ▲' : o.em < 1 ? ' ▼' : ''}`, cls);
   anim(u, 'hit', dl); setTimeout(() => sfx(o.crit ? 'crit' : 'hit'), dl);
@@ -373,21 +449,43 @@ function applyStatus(t, s, dur, pow, src){
   if(ex){ ex.dur = Math.max(ex.dur, dur); ex.val = Math.max(ex.val, val); } else t.statuses.push({s, dur, val});
   float(t, `${d.icon} ${d.name}`, 'fl-status fl-' + d.kind);
 }
-const canUse = (u, s) => (u.cds[s.id] || 0) <= 0 && u.cp >= s.cp;
+// Illusions are harder to shrug off with talents, and bosses half-resist the two that would trivialise them.
+function statusChance(u, s, a, tg){
+  let ch = a.chance == null ? 1 : a.chance;
+  if(s.type === 'genjutsu') ch += tv(u, 'statusChance');
+  if(tg && tg.boss && (a.s === 'sleep' || a.s === 'confuse')) ch *= 0.5;
+  return Math.min(1, ch);
+}
+// A confused fighter sometimes lashes out at a random fighter on its own side.
+function redirect(u, t){
+  if(!hasStatus(u, 'confuse') || Math.random() >= 0.5) return t;
+  const pool = friends(u), n = pool[Math.floor(Math.random() * pool.length)];
+  if(!n) return t;
+  log(`😵 <b>${esc(u.name)}</b> is confused and lashes out at ${esc(n.name)}!`); float(u, 'Confused', 'fl-status fl-debuff');
+  return n;
+}
 
-function doBasic(u, t){ if(!t) return; anim(u, 'lunge'); log(`<b>${esc(u.name)}</b> attacks.`); attack(u, t, {power:1}); }
-function doCharge(u){ anim(u, 'charge'); log(`🌀 <b>${esc(u.name)}</b> gathers chakra.`); restoreCp(u, Math.round(u.maxCp * 0.3) + 4); }
+/* ---- actions ---- */
+function doBasic(u, t){ if(!t) return; t = redirect(u, t); anim(u, 'lunge'); log(`<b>${esc(u.name)}</b> attacks.`); attack(u, t, {power:BASIC_POWER, type:'basic'}); }
+function doCharge(u){
+  anim(u, 'charge'); log(`🌀 <b>${esc(u.name)}</b> gathers chakra${CHARGE.guard ? ' and braces' : ''}.`);
+  restoreCp(u, chargeGain(u)); if(CHARGE.guard) applyStatus(u, 'guard', 1, 0, u);
+}
 function useSkill(u, s, t){
-  u.cp -= s.cp; u.cds[s.id] = s.cd + 1; if(u.side === 'ally' && u.controller === 'player') S.counters.skills++; sfx('skill');
+  u.cp -= skillCost(u, s); u.cds[s.id] = skillCd(u, s) + 1;
+  if(s.hpCost){ const hc = hpCostOf(u, s); u.hp = Math.max(1, u.hp - hc); float(u, `-${hc} HP`, 'fl-dmg fl-self'); }
+  if(u.side === 'ally' && u.controller === 'player') S.counters.skills++; sfx('skill');
   float(u, `${s.icon} ${s.name}`, 'fl-skill');
-  log(`<b>${esc(u.name)}</b> uses <b style="color:${ELEMENTS[s.el].color}">${s.name}</b>!`);
+  log(`<b>${esc(u.name)}</b> uses <b style="color:${skillColor(s)}">${s.name}</b>!${s.hpCost ? ' ☠️ It costs blood.' : ''}`);
   const self = s.target === 'self', ally = s.target === 'ally' ? mostWounded(u) : null;
+  if(!self && !ally && s.target === 'enemy') t = redirect(u, t);
   const targets = self || ally ? [] : s.target === 'allEnemies' ? opponents(u) : [t && t.alive ? t : opponents(u)[0]];
   if(s.power) anim(u, 'lunge'); else anim(u, 'charge');
+  const gen = s.type === 'genjutsu';
   for(const tg of targets){
     if(!tg) continue;
-    const landed = s.power ? attack(u, tg, {power:s.power, hits:s.hits, el:s.el, critBonus:s.critBonus, dodgeMult:0.6}) : true;
-    if(landed) for(const a of s.apply || []) if(a.on !== 'self' && Math.random() < (a.chance == null ? 1 : a.chance)) applyStatus(tg, a.s, a.dur, a.pow, u);
+    const landed = s.power ? attack(u, tg, {power:s.power, hits:s.hits, el:s.el, type:s.type, critBonus:s.critBonus, dodgeMult:0.6, pierce:s.pierce, leech:s.leech}) : true;
+    if(landed) for(const a of s.apply || []) if(a.on !== 'self' && Math.random() < statusChance(u, s, a, tg)) applyStatus(tg, a.s, a.dur + (gen ? tv(u, 'genDur') : 0), a.pow, u);
   }
   const buffTo = ally || u;
   for(const a of s.apply || []) if((a.on === 'self' || self || ally) && Math.random() < (a.chance == null ? 1 : a.chance)) applyStatus(a.on === 'self' ? u : buffTo, a.s, a.dur, a.pow, u);
@@ -405,8 +503,87 @@ function useItem(u, id, t){
   if(us.cpPct) restoreCp(u, Math.round(u.maxCp * us.cpPct));
   if(us.damage && t){ const em = elemMult(us.el, t.el), d = Math.round((us.damage + S.char.level * us.scale) * em); dealDamage(t, d, {em}); log(`${it.icon} The tag blasts ${esc(t.name)} for <b>${d}</b>.`); }
 }
+
+/* ---- how much is a move worth? One value model shared by allied AI, auto-battle, and the auto-loadout picker ----
+   Units are "points of Power": a plain attack is worth about 1. */
+const STATUS_WORTH = {stun:1.1, sleep:1.1, slow:0.18, weaken:0.28, expose:0.3, confuse:0.45, blind:0.35, silence:0.4,
+  empower:0.3, guard:0.3, haste:0.22, regen:0, frenzy:0.4, vamp:0.25, focus:0.2, evasion:0.25};
+// average damage of one hit, ignoring luck and crits
+function hitDamage(u, s, t){
+  let d = u.atk * (s.power == null ? BASIC_POWER : s.power);
+  if(t) d *= elemMult(s.el, t.el);
+  if(s.el && u.elemBoost === s.el) d *= 1 + u.elemPct;
+  d *= 1 + tv(u, 'dmg') + ((u.t && u.t.dmgType && u.t.dmgType[s.type]) || 0);
+  if(hasStatus(u, 'empower')) d *= 1.3;
+  if(hasStatus(u, 'frenzy')) d *= 1.5;
+  if(hasStatus(u, 'weaken')) d *= 0.75;
+  if(t){ if(hasStatus(t, 'guard') && !s.pierce) d *= 0.65; if(hasStatus(t, 'expose')) d *= 1.25; if(hasStatus(t, 'frenzy')) d *= 1.2; }
+  return d;
+}
+// what the battle screen promises: expected damage to one target, crits included
+function previewDamage(u, s, t){
+  if(!s.power) return 0;
+  const crit = Math.min(1, (u.crit + (s.critBonus || 0) + (hasStatus(u, 'focus') ? 25 : 0)) / 100);
+  return Math.round(hitDamage(u, s, t) * s.hits * (1 + crit * (0.5 + tv(u, 'critDmg'))));
+}
+function moveValue(u, s, t, foes){
+  const atk = Math.max(1, u.atk), aoe = s.target === 'allEnemies', nT = aoe ? Math.min(3, Math.max(1, foes.length)) : 1;
+  let v = 0;
+  if(s.power){
+    const crit = Math.min(1, (u.crit + (s.critBonus || 0)) / 100), dmg = hitDamage(u, s, t) * s.hits * (1 + crit * 0.5) * 0.93 / atk * nT;
+    v += dmg; if(s.leech) v += dmg * s.leech * 0.5;
+  }
+  for(const a of s.apply || []){
+    const ch = a.chance == null ? 1 : a.chance, self = a.on === 'self' || s.target === 'self' || s.target === 'ally';
+    const tgt = self ? (s.target === 'ally' ? mostWounded(u) : u) : t; if(!tgt) continue;
+    let w;
+    if(a.s === 'burn' || a.s === 'bleed') w = (a.pow || 0.3) * a.dur * 0.9;
+    else if(a.s === 'regen') w = (a.pow || 0.05) * tgt.maxHp * a.dur / atk * 0.5;
+    else w = (STATUS_WORTH[a.s] || 0.2) * a.dur;
+    if(hasStatus(tgt, a.s)) w *= 0.15;                                          // already has it
+    if(!self && STATUSES[a.s].kind === 'debuff' && tgt.hp < tgt.maxHp * 0.15) w *= 0.3; // about to fall anyway
+    if(!self && tgt.boss && (a.s === 'sleep' || a.s === 'confuse')) w *= 0.5;
+    v += w * ch * (aoe ? nT : 1);
+  }
+  if(s.heal){
+    const who = s.target === 'ally' ? mostWounded(u) : u, urgent = 1 + clamp((0.5 - who.hp / who.maxHp) * 3, 0, 1.5);
+    v += Math.min(who.maxHp - who.hp, s.heal * who.maxHp) / atk * 0.9 * urgent;
+  }
+  if(s.cpRestore) v += Math.min(u.maxCp - u.cp, s.cpRestore * u.maxCp) / atk * 0.15;
+  if(s.cleanse) v += u.statuses.filter(x => STATUSES[x.s].kind === 'debuff').length * 0.5;
+  if(s.hpCost) v -= hpCostOf(u, s) / atk * 0.45 * (u.hp < u.maxHp * 0.5 ? 2 : 1);
+  // Chakra is paid back by Charging, which costs a turn; plenty of Chakra makes a technique nearly free
+  v -= skillCost(u, s) / chargeGain(u) * 0.8 * clamp(1.2 - u.cp / u.maxCp, 0.35, 1);
+  return v;
+}
+// Picks a move: {k:'skill', s} | {k:'attack'} | {k:'charge'} | {k:'item', id}
+function smartChoose(u, t){
+  const foes = opponents(u), pool = [];
+  for(const id of u.skills){
+    const s = SKILL[id]; if(!s || !canUse(u, s)) continue;
+    if((s.target === 'enemy' || s.target === 'allEnemies') && !foes.length) continue;
+    pool.push({k:'skill', s, v:moveValue(u, s, t, foes)});
+  }
+  const basic = {k:'attack', v:moveValue(u, BASIC, t, foes)}; pool.push(basic);
+  if(!u.isPet && u.side === 'ally' && u.hp < u.maxHp * 0.3 && !pool.some(m => m.s && m.s.heal && m.v > 0)){
+    const pot = ['moon_elixir', 'g_salve', 'salve'].find(id => S.inventory[id] > 0 && S.char.level >= ITEM[id].lvl);
+    if(pot) return {k:'item', id:pot};
+  }
+  pool.sort((a, b) => b.v - a.v);
+  const best = pool[0];
+  if(best.v < basic.v * 1.12 && u.cp < u.maxCp * 0.35) return {k:'charge'};
+  return best;
+}
+function perform(u, ch, t){
+  if(ch.k === 'skill') useSkill(u, ch.s, t);
+  else if(ch.k === 'item') useItem(u, ch.id, t);
+  else if(ch.k === 'charge') doCharge(u);
+  else doBasic(u, t);
+}
+// Foes (and ghosts) pick their moves with a little randomness; your side's AI uses the value model.
 function aiAct(u){
   const foes = opponents(u); if(!foes.length) return;
+  if(u.side === 'ally'){ const t = getTarget(); return perform(u, smartChoose(u, t), t); }
   const t = Math.random() < 0.7 ? foes.reduce((a, b) => (a.hp / a.maxHp <= b.hp / b.maxHp ? a : b)) : foes[Math.floor(Math.random() * foes.length)];
   const ready = u.skills.map(id => SKILL[id]).filter(s => s && canUse(u, s));
   const hurt = mostWounded(u);
@@ -415,9 +592,17 @@ function aiAct(u){
   const buff = ready.find(s => (s.target === 'self' || s.target === 'ally') && !s.heal && !(s.apply || []).every(a => hasStatus(s.target === 'ally' ? hurt : u, a.s)));
   if(buff && Math.random() < 0.35) return useSkill(u, buff, t);
   const off = ready.filter(s => s.target === 'enemy' || s.target === 'allEnemies');
-  if(off.length && Math.random() < (u.isPet ? 0.7 : 0.55)) return useSkill(u, off[Math.floor(Math.random() * off.length)], t);
+  if(off.length && Math.random() < 0.55) return useSkill(u, off[Math.floor(Math.random() * off.length)], t);
   if(u.cp < u.maxCp * 0.3 && Math.random() < 0.4) return doCharge(u);
   doBasic(u, t);
+}
+// Turns a unit over to the AI (or back to you) in the middle of a battle.
+function charOfUnit(u){ return u.isPet ? (u.owner === 'leader' ? S.char : recruitById(u.owner)) : u.key === 'leader' ? S.char : recruitById(u.key); }
+function setAuto(u, auto){
+  if(!B || !u || u.side !== 'ally' || u.key === 'leader') return;
+  const ch = charOfUnit(u); if(ch){ if(u.isPet) ch.petAuto = auto; else ch.auto = auto; }
+  u.controller = auto ? 'ai' : 'player';
+  if(auto && B.active === u && B.awaiting) playerAct(x => { const t = getTarget(); perform(x, smartChoose(x, t), t); });
 }
 function playerAct(fn){
   if(!B || !B.awaiting || B.over) return;
@@ -473,7 +658,7 @@ function addClanRep(n){ const c = S.char; if(!c.clan || !n) return 0; const befo
 function finishRun(outcome, fled = false){
   const c = S.char, oldLv = c.level, oldRank = rankOf(oldLv), win = outcome === true;
   const res = {win, fled, xp:RUN.xp, gold:RUN.gold, items:[], lines:[], kind:RUN.kind};
-  const petUnit = B && B.allies.find(a => a.isPet), squadUnits = B ? B.allies.filter(a => a.isSquad) : [];
+  const petUnits = B ? B.allies.filter(a => a.isPet) : [], squadUnits = B ? B.allies.filter(a => a.isSquad) : [];
   if(RUN.kind === 'mission'){
     const m = MISSION[RUN.id];
     res.title = win ? 'Mission complete' : fled ? 'Mission abandoned' : 'Mission failed'; res.sub = m.name; res.retry = {act:'startMission', arg:m.id, label:win ? 'Run it again' : 'Try again'};
@@ -508,9 +693,11 @@ function finishRun(outcome, fled = false){
     res.xp += Math.round(xpToNext(c.level) * 0.05); res.gold += 20 + c.level * 5;
     if(c.clan){ res.lines.push(`${CLAN[c.clan.id].crest} +10 clan reputation`); res.clanUp = addClanRep(10); }
   }
-  if(petUnit && (win || RUN.kind === 'event')){
-    c.bond[c.pet] = (c.bond[c.pet] || 0) + 1;
-    if(c.bond[c.pet] % 5 === 0 && bondLevel(c.bond[c.pet]) <= 10) res.lines.push(`🐾 ${PET[c.pet].name} reached bond level ${bondLevel(c.bond[c.pet])}!`);
+  if(win || RUN.kind === 'event') for(const pu of petUnits){
+    const owner = charOfUnit(pu); if(!owner || !owner.pet) continue;
+    owner.bond[owner.pet] = (owner.bond[owner.pet] || 0) + 1;
+    const b = owner.bond[owner.pet];
+    if(b % 5 === 0 && bondLevel(b) <= 10) res.lines.push(`🐾 ${esc(PET[owner.pet].name)}${owner === c ? '' : ` (${esc(owner.name)}'s)`} reached bond level ${bondLevel(b)}!`);
   }
   if(res.clanUp) res.lines.push(`🎖️ Clan rank up: ${CLAN_TIERS[res.clanUp].name}! Clan perks grow stronger.`);
   c.gold += res.gold;
@@ -524,6 +711,7 @@ function finishRun(outcome, fled = false){
   }
   const nr = rankOf(c.level); res.newRank = nr !== oldRank ? nr : null;
   res.newSkills = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && s.lvl > oldLv && s.lvl <= c.level);
+  res.newTalent = TALENT_TIERS.filter(lv => lv > oldLv && lv <= c.level).length;
   res.ups.forEach(l => emit('levelUp', l));
   B = null; RUN = null; UI.results = res;
   res.ach = checkAchievements(true);

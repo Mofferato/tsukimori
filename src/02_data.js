@@ -18,7 +18,13 @@
    • Save format: the whole S object as JSON (versioned; see migrate()).
    ===================================================================== */
 
-const MAX_LEVEL = 60, POINTS_PER_LEVEL = 3, MAX_LOADOUT = 6;
+const MAX_LEVEL = 60, POINTS_PER_LEVEL = 3, MAX_LOADOUT = 8;
+// A plain attack is deliberately weaker than any real technique; techniques are what you spend Chakra on.
+const BASIC_POWER = 0.9;
+// Charge: spend the turn gathering Chakra. It also braces you (Guard) until your next turn.
+const CHARGE = {cp:0.35, flat:4, guard:true};
+// Chakra regained for free at the start of every turn, as a share of max Chakra (talents add to it).
+const CP_REGEN = 0.03;
 
 const ELEMENTS = {
   fire:      {name:'Fire',      icon:'🔥', color:'#e8553a', beats:'wind',      style:'Burst damage and lingering burns.'},
@@ -62,54 +68,94 @@ const STATUSES = {
   guard:   {name:'Guard',   icon:'🛡️', kind:'buff',   desc:'Takes 35% less damage.'},
   haste:   {name:'Haste',   icon:'💨', kind:'buff',   desc:'Agility +40% and +10% dodge.'},
   regen:   {name:'Regen',   icon:'🌿', kind:'buff',   scale:'maxhp', desc:'Heals part of max HP each turn.'},
+  // illusions and forbidden arts
+  sleep:   {name:'Sleep',   icon:'😴', kind:'debuff', desc:'Loses turns until woken. Any damage wakes it.'},
+  confuse: {name:'Confuse', icon:'😵', kind:'debuff', desc:'Half the time, attacks a random fighter on its own side.'},
+  blind:   {name:'Blind',   icon:'🌫️', kind:'debuff', desc:'Attacks miss 30% more often.'},
+  silence: {name:'Silence', icon:'🤐', kind:'debuff', desc:'Cannot use techniques. Basic attacks only.'},
+  frenzy:  {name:'Frenzy',  icon:'😈', kind:'buff',   desc:'Deals 50% more damage but takes 20% more.'},
+  vamp:    {name:'Siphon',  icon:'🩸', kind:'buff',   desc:'Heals for 35% of the damage you deal.'},
+  focus:   {name:'Focus',   icon:'🎯', kind:'buff',   desc:'+25% critical chance.'},
+  evasion: {name:'Evasion', icon:'🌀', kind:'buff',   desc:'+25% dodge.'},
 };
+// Technique families. Ninjutsu is elemental (the five elements); the rest have no element, so the wheel never helps or hurts them.
+const TECH_TYPES = {
+  ninjutsu: {name:'Ninjutsu', icon:'🔥', color:'#e8553a', blurb:'Elemental arts. Strong or weak depending on the foe\'s element.'},
+  taijutsu: {name:'Taijutsu', icon:'🥋', color:'#d9822b', blurb:'Body arts: cheap, fast and many-hit. No element, so never resisted.'},
+  genjutsu: {name:'Genjutsu', icon:'🌀', color:'#8a3fbf', blurb:'Illusions: blind, confuse, silence or put foes to sleep.'},
+  kinjutsu: {name:'Kinjutsu', icon:'☠️', color:'#8a2a3a', blurb:'Forbidden arts: huge power, paid for with your own health.'},
+};
+const TYPE_ORDER = ['ninjutsu','taijutsu','genjutsu','kinjutsu'];
 
 /* SKILLS — target: 'enemy' (default) | 'self' | 'allEnemies'
+   type = 'ninjutsu' (elemental, el set) | 'taijutsu' | 'genjutsu' | 'kinjutsu' (el null: no element)
    power = multiplier of the user's Power per hit, hits = number of hits
-   apply = [{s:status, dur, pow, chance, on:'self'}], heal/cpRestore = share of max */
+   apply = [{s:status, dur, pow, chance, on:'self'}], heal/cpRestore = share of max
+   hpCost = share of max HP paid to cast, leech = share of damage dealt that heals you, pierce = ignores Guard */
 const TIER_PRICE = {1:40, 3:90, 6:180, 10:320, 15:520, 22:850, 35:1400};
 const SKILLS = [
   // FIRE
-  {id:'fire_spark',   el:'fire', lvl:1,  name:'Spark Palm',      icon:'✋', cp:8,  cd:1, power:1.35, desc:'A palm strike wrapped in sparks.'},
-  {id:'fire_cinder',  el:'fire', lvl:3,  name:'Cinder Bloom',    icon:'🌺', cp:12, cd:3, power:0.8, apply:[{s:'burn',dur:3,pow:0.35}], desc:'Scatters embers that cling and burn.'},
+  {id:'fire_spark',   el:'fire', lvl:1,  name:'Spark Palm',      icon:'✋', cp:8,  cd:1, power:1.55, desc:'A palm strike wrapped in sparks.'},
+  {id:'fire_cinder',  el:'fire', lvl:3,  name:'Cinder Bloom',    icon:'🌺', cp:12, cd:3, power:1.1, apply:[{s:'burn',dur:3,pow:0.4}], desc:'Scatters embers that cling and burn.'},
   {id:'fire_resolve', el:'fire', lvl:6,  name:'Kindled Resolve', icon:'🕯️', cp:14, cd:4, target:'self', apply:[{s:'empower',dur:3}], desc:'Stoke your inner flame to hit harder.'},
-  {id:'fire_hearth',  el:'fire', lvl:10, name:'Hearthfire Mend', icon:'♨️', cp:18, cd:4, target:'self', heal:0.22, apply:[{s:'regen',dur:2,pow:0.05}], desc:'Warmth knits your wounds closed.'},
-  {id:'fire_flare',   el:'fire', lvl:15, name:'Flare Burst',     icon:'💥', cp:22, cd:3, power:1.8, apply:[{s:'weaken',dur:2}], desc:'A blinding blast that rattles the foe.'},
-  {id:'fire_sunfall', el:'fire', lvl:22, name:'Crimson Sunfall', icon:'☀️', cp:32, cd:5, power:2.6, apply:[{s:'burn',dur:3,pow:0.5}], desc:'Call down a falling sun of flame.'},
+  {id:'fire_hearth',  el:'fire', lvl:10, name:'Hearthfire Mend', icon:'♨️', cp:18, cd:4, target:'self', heal:0.26, apply:[{s:'regen',dur:2,pow:0.05}], desc:'Warmth knits your wounds closed.'},
+  {id:'fire_flare',   el:'fire', lvl:15, name:'Flare Burst',     icon:'💥', cp:22, cd:3, power:2.4, apply:[{s:'weaken',dur:2}], desc:'A blinding blast that rattles the foe.'},
+  {id:'fire_sunfall', el:'fire', lvl:22, name:'Crimson Sunfall', icon:'☀️', cp:32, cd:5, power:3.4, apply:[{s:'burn',dur:3,pow:0.5}], desc:'Call down a falling sun of flame.'},
   // WIND
-  {id:'wind_razor',   el:'wind', lvl:1,  name:'Razor Breeze',    icon:'🍃', cp:8,  cd:1, power:1.15, apply:[{s:'bleed',dur:2,pow:0.25,chance:0.6}], desc:'A thin gust sharp enough to cut.'},
+  {id:'wind_razor',   el:'wind', lvl:1,  name:'Razor Breeze',    icon:'🍃', cp:8,  cd:1, power:1.4, apply:[{s:'bleed',dur:2,pow:0.25,chance:0.6}], desc:'A thin gust sharp enough to cut.'},
   {id:'wind_tail',    el:'wind', lvl:3,  name:'Tailwind Step',   icon:'💨', cp:10, cd:4, target:'self', apply:[{s:'haste',dur:3}], desc:'Ride the wind: faster and harder to hit.'},
-  {id:'wind_cyclone', el:'wind', lvl:6,  name:'Cyclone Kick',    icon:'🌀', cp:14, cd:2, power:0.8, hits:2, desc:'Two spinning kicks in one breath.'},
-  {id:'wind_whisper', el:'wind', lvl:10, name:'Whisper Cut',     icon:'🗡️', cp:18, cd:3, power:1.3, critBonus:40, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A silent slash aimed at weak points.'},
-  {id:'wind_snare',   el:'wind', lvl:15, name:'Vacuum Snare',    icon:'🫧', cp:20, cd:4, power:0.6, apply:[{s:'slow',dur:2},{s:'expose',dur:2}], desc:'Steal the air around the foe.'},
-  {id:'wind_tempest', el:'wind', lvl:22, name:'Thousand-Leaf Tempest', icon:'🌪️', cp:32, cd:5, power:0.9, hits:3, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A storm of razor leaves.'},
+  {id:'wind_cyclone', el:'wind', lvl:6,  name:'Cyclone Kick',    icon:'🌀', cp:14, cd:2, power:0.95, hits:2, desc:'Two spinning kicks in one breath.'},
+  {id:'wind_whisper', el:'wind', lvl:10, name:'Whisper Cut',     icon:'🗡️', cp:18, cd:3, power:1.7, critBonus:40, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A silent slash aimed at weak points.'},
+  {id:'wind_snare',   el:'wind', lvl:15, name:'Vacuum Snare',    icon:'🫧', cp:20, cd:4, power:1.3, apply:[{s:'slow',dur:2},{s:'expose',dur:2}], desc:'Steal the air around the foe.'},
+  {id:'wind_tempest', el:'wind', lvl:22, name:'Thousand-Leaf Tempest', icon:'🌪️', cp:32, cd:5, power:1.1, hits:3, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A storm of razor leaves.'},
   // LIGHTNING
-  {id:'ltn_jab',      el:'lightning', lvl:1,  name:'Static Jab',      icon:'👊', cp:8,  cd:1, power:1.2, apply:[{s:'stun',dur:1,chance:0.2}], desc:'A charged jab that can lock muscles.'},
-  {id:'ltn_arc',      el:'lightning', lvl:3,  name:'Arc Chain',       icon:'🔗', cp:14, cd:3, power:1.0, target:'allEnemies', desc:'Lightning leaps between every foe.'},
+  {id:'ltn_jab',      el:'lightning', lvl:1,  name:'Static Jab',      icon:'👊', cp:8,  cd:1, power:1.45, apply:[{s:'stun',dur:1,chance:0.2}], desc:'A charged jab that can lock muscles.'},
+  {id:'ltn_arc',      el:'lightning', lvl:3,  name:'Arc Chain',       icon:'🔗', cp:14, cd:3, power:1.25, target:'allEnemies', desc:'Lightning leaps between every foe.'},
   {id:'ltn_surge',    el:'lightning', lvl:6,  name:'Nerve Surge',     icon:'🧠', cp:14, cd:4, target:'self', apply:[{s:'empower',dur:2},{s:'haste',dur:2}], desc:'Overclock your reflexes.'},
-  {id:'ltn_needle',   el:'lightning', lvl:10, name:'Thunder Needle',  icon:'📍', cp:18, cd:3, power:1.6, apply:[{s:'slow',dur:2}], desc:'A bolt that numbs on impact.'},
-  {id:'ltn_coil',     el:'lightning', lvl:15, name:'Paralysis Coil',  icon:'🌩️', cp:22, cd:5, power:0.7, apply:[{s:'stun',dur:1}], desc:'Wrap the foe in crackling wire.'},
-  {id:'ltn_spear',    el:'lightning', lvl:22, name:"Heaven's Spear",  icon:'⚡', cp:34, cd:6, power:3.0, desc:'One spear of pure thunder.'},
+  {id:'ltn_needle',   el:'lightning', lvl:10, name:'Thunder Needle',  icon:'📍', cp:18, cd:3, power:2.0, apply:[{s:'slow',dur:2}], desc:'A bolt that numbs on impact.'},
+  {id:'ltn_coil',     el:'lightning', lvl:15, name:'Paralysis Coil',  icon:'🌩️', cp:22, cd:5, power:1.4, apply:[{s:'stun',dur:1}], desc:'Wrap the foe in crackling wire.'},
+  {id:'ltn_spear',    el:'lightning', lvl:22, name:"Heaven's Spear",  icon:'⚡', cp:34, cd:6, power:4.0, desc:'One spear of pure thunder.'},
   // EARTH
-  {id:'earth_pebble', el:'earth', lvl:1,  name:'Pebble Barrage',   icon:'🪨', cp:8,  cd:1, power:0.48, hits:3, desc:'Flick a volley of hardened stones.'},
+  {id:'earth_pebble', el:'earth', lvl:1,  name:'Pebble Barrage',   icon:'🪨', cp:8,  cd:1, power:0.58, hits:3, desc:'Flick a volley of hardened stones.'},
   {id:'earth_skin',   el:'earth', lvl:3,  name:'Stone Skin',       icon:'🛡️', cp:10, cd:4, target:'self', apply:[{s:'guard',dur:3}], desc:'Harden your body like granite.'},
-  {id:'earth_quake',  el:'earth', lvl:6,  name:'Quake Stomp',      icon:'🦶', cp:16, cd:3, power:0.9, target:'allEnemies', apply:[{s:'slow',dur:2,chance:0.5}], desc:'Shake the ground under every foe.'},
-  {id:'earth_root',   el:'earth', lvl:10, name:'Iron Root',        icon:'🌳', cp:18, cd:5, target:'self', heal:0.2, apply:[{s:'guard',dur:2}], desc:'Draw strength up from the earth.'},
-  {id:'earth_boulder',el:'earth', lvl:15, name:'Boulder Crush',    icon:'🗿', cp:22, cd:3, power:1.9, apply:[{s:'stun',dur:1,chance:0.3}], desc:'Heave a boulder onto the foe.'},
-  {id:'earth_wrath',  el:'earth', lvl:22, name:"Mountain's Wrath", icon:'🏔️', cp:32, cd:5, power:2.4, apply:[{s:'expose',dur:2},{s:'guard',dur:2,on:'self'}], desc:'The mountain rises to crush and shelter.'},
+  {id:'earth_quake',  el:'earth', lvl:6,  name:'Quake Stomp',      icon:'🦶', cp:16, cd:3, power:1.25, target:'allEnemies', apply:[{s:'slow',dur:2,chance:0.5}], desc:'Shake the ground under every foe.'},
+  {id:'earth_root',   el:'earth', lvl:10, name:'Iron Root',        icon:'🌳', cp:18, cd:5, target:'self', heal:0.24, apply:[{s:'guard',dur:2}], desc:'Draw strength up from the earth.'},
+  {id:'earth_boulder',el:'earth', lvl:15, name:'Boulder Crush',    icon:'🗿', cp:22, cd:3, power:2.5, apply:[{s:'stun',dur:1,chance:0.3}], desc:'Heave a boulder onto the foe.'},
+  {id:'earth_wrath',  el:'earth', lvl:22, name:"Mountain's Wrath", icon:'🏔️', cp:32, cd:5, power:3.2, apply:[{s:'expose',dur:2},{s:'guard',dur:2,on:'self'}], desc:'The mountain rises to crush and shelter.'},
   // WATER
-  {id:'water_whip',     el:'water', lvl:1,  name:'Tide Whip',       icon:'🌊', cp:8,  cd:1, power:1.25, apply:[{s:'slow',dur:2,chance:0.2}], desc:'Lash out with a rope of water.'},
-  {id:'water_mend',     el:'water', lvl:3,  name:'Mist Mend',       icon:'🌫️', cp:12, cd:4, target:'self', heal:0.28, desc:'Cool mist that closes wounds.'},
-  {id:'water_undertow', el:'water', lvl:6,  name:'Undertow',        icon:'🫗', cp:14, cd:3, power:1.0, apply:[{s:'slow',dur:2},{s:'weaken',dur:2}], desc:'Drag the foe down and sap their strength.'},
-  {id:'water_needles',  el:'water', lvl:10, name:'Rain of Needles', icon:'🌧️', cp:20, cd:3, power:0.95, target:'allEnemies', apply:[{s:'bleed',dur:2,pow:0.2}], desc:'Raindrops frozen into needles.'},
-  {id:'water_well',     el:'water', lvl:15, name:'Wellspring',      icon:'⛲', cp:0,  cd:5, target:'self', cpRestore:0.35, cleanse:true, apply:[{s:'regen',dur:3,pow:0.07}], desc:'Cleanse, restore Chakra and regenerate.'},
-  {id:'water_leviathan',el:'water', lvl:22, name:'Leviathan Surge', icon:'🐉', cp:32, cd:5, power:2.5, apply:[{s:'weaken',dur:2}], desc:'A serpent of seawater crashes down.'},
+  {id:'water_whip',     el:'water', lvl:1,  name:'Tide Whip',       icon:'🌊', cp:8,  cd:1, power:1.5, apply:[{s:'slow',dur:2,chance:0.2}], desc:'Lash out with a rope of water.'},
+  {id:'water_mend',     el:'water', lvl:3,  name:'Mist Mend',       icon:'🌫️', cp:12, cd:4, target:'self', heal:0.3, desc:'Cool mist that closes wounds.'},
+  {id:'water_undertow', el:'water', lvl:6,  name:'Undertow',        icon:'🫗', cp:14, cd:3, power:1.45, apply:[{s:'slow',dur:2},{s:'weaken',dur:2}], desc:'Drag the foe down and sap their strength.'},
+  {id:'water_needles',  el:'water', lvl:10, name:'Rain of Needles', icon:'🌧️', cp:20, cd:3, power:1.2, target:'allEnemies', apply:[{s:'bleed',dur:2,pow:0.2}], desc:'Raindrops frozen into needles.'},
+  {id:'water_well',     el:'water', lvl:15, name:'Wellspring',      icon:'⛲', cp:0,  cd:5, target:'self', cpRestore:0.4, cleanse:true, apply:[{s:'regen',dur:3,pow:0.07}], desc:'Cleanse, restore Chakra and regenerate.'},
+  {id:'water_leviathan',el:'water', lvl:22, name:'Leviathan Surge', icon:'🐉', cp:32, cd:5, power:3.3, apply:[{s:'weaken',dur:2}], desc:'A serpent of seawater crashes down.'},
   // ULTIMATES (tier 7)
-  {id:'fire_phoenix',   el:'fire',      lvl:35, name:'Vermilion Phoenix', icon:'🦅', cp:40, cd:6, power:3.2, apply:[{s:'burn',dur:3,pow:0.6}], desc:'A burning phoenix dives through the foe.'},
-  {id:'wind_eye',       el:'wind',      lvl:35, name:'Eye of the Gale',   icon:'👁️', cp:38, cd:6, power:0.75, hits:4, apply:[{s:'haste',dur:2,on:'self'}], desc:'Four strikes from the calm center of a storm.'},
-  {id:'ltn_sovereign',  el:'lightning', lvl:35, name:'Storm Sovereign',   icon:'👑', cp:42, cd:6, power:1.6, target:'allEnemies', apply:[{s:'stun',dur:1,chance:0.35}], desc:'Crown the battlefield in lightning.'},
-  {id:'earth_colossus', el:'earth',     lvl:35, name:'Worldroot Colossus',icon:'🗻', cp:40, cd:6, power:2.4, heal:0.15, apply:[{s:'guard',dur:3,on:'self'}], desc:'Become the mountain: strike, mend and endure.'},
-  {id:'water_tsunami',  el:'water',     lvl:35, name:'Moonlit Tsunami',   icon:'🌕', cp:42, cd:6, power:1.7, target:'allEnemies', apply:[{s:'weaken',dur:2},{s:'slow',dur:2}], desc:'The tide rises under a full moon.'},
+  {id:'fire_phoenix',   el:'fire',      lvl:35, name:'Vermilion Phoenix', icon:'🦅', cp:40, cd:6, power:4.6, apply:[{s:'burn',dur:3,pow:0.6}], desc:'A burning phoenix dives through the foe.'},
+  {id:'wind_eye',       el:'wind',      lvl:35, name:'Eye of the Gale',   icon:'👁️', cp:38, cd:6, power:1.05, hits:4, apply:[{s:'haste',dur:2,on:'self'}], desc:'Four strikes from the calm center of a storm.'},
+  {id:'ltn_sovereign',  el:'lightning', lvl:35, name:'Storm Sovereign',   icon:'👑', cp:42, cd:6, power:2.2, target:'allEnemies', apply:[{s:'stun',dur:1,chance:0.35}], desc:'Crown the battlefield in lightning.'},
+  {id:'earth_colossus', el:'earth',     lvl:35, name:'Worldroot Colossus',icon:'🗻', cp:40, cd:6, power:3.4, heal:0.15, apply:[{s:'guard',dur:3,on:'self'}], desc:'Become the mountain: strike, mend and endure.'},
+  {id:'water_tsunami',  el:'water',     lvl:35, name:'Moonlit Tsunami',   icon:'🌕', cp:42, cd:6, power:2.2, target:'allEnemies', apply:[{s:'weaken',dur:2},{s:'slow',dur:2}], desc:'The tide rises under a full moon.'},
+  // TAIJUTSU: body arts. No element, cheap, fast, many hits. Anyone can learn them.
+  {id:'tai_heel',    type:'taijutsu', el:null, lvl:1,  name:'Crescent Heel',     icon:'🦵', cp:7,  cd:1, power:1.35, critBonus:15, price:50, desc:'A quick axe-kick that finds the weak spot.'},
+  {id:'tai_flurry',  type:'taijutsu', el:null, lvl:5,  name:'Petal Flurry',      icon:'🌸', cp:11, cd:2, power:0.5, hits:4, price:140, desc:'Four lightning-fast strikes like falling petals.'},
+  {id:'tai_throw',   type:'taijutsu', el:null, lvl:10, name:'Stillwater Throw',  icon:'🤼', cp:15, cd:3, power:1.75, apply:[{s:'stun',dur:1,chance:0.4}], price:300, desc:'Flip the foe onto the ground. Often stuns.'},
+  {id:'tai_stance',  type:'taijutsu', el:null, lvl:12, name:'Heron Stance',      icon:'🪽', cp:12, cd:4, target:'self', apply:[{s:'focus',dur:3},{s:'evasion',dur:3}], price:340, desc:'Stand like a heron: sharper strikes, harder to hit.'},
+  {id:'tai_breaker', type:'taijutsu', el:null, lvl:15, name:'Bamboo Breaker',    icon:'🎋', cp:22, cd:3, power:2.2, pierce:true, apply:[{s:'expose',dur:2}], price:520, desc:'A snapping blow that ignores Guard and leaves the foe open.'},
+  {id:'tai_rush',    type:'taijutsu', el:null, lvl:25, name:'Hundred-Step Rush', icon:'💫', cp:32, cd:5, power:0.6, hits:5, apply:[{s:'haste',dur:2,on:'self'}], price:1100, desc:'A blur of steps and strikes that leaves you quicker.'},
+  {id:'tai_combo',   type:'taijutsu', el:null, lvl:40, name:'Thousand-Moon Combo', icon:'🌙', cp:46, cd:7, power:0.65, hits:7, critBonus:20, price:2400, desc:'Seven crescent strikes in the span of one breath.'},
+  // GENJUTSU: illusions. They barely hurt; they decide fights.
+  {id:'gen_haze',    type:'genjutsu', el:null, lvl:6,  name:'Lantern Haze',      icon:'🏮', cp:12, cd:3, power:1.15, apply:[{s:'blind',dur:3,chance:0.9}], price:200, desc:'A drifting glow that blinds the foe. Their attacks miss more.'},
+  {id:'gen_lull',    type:'genjutsu', el:null, lvl:10, name:'Moth-Wing Lullaby', icon:'🦋', cp:16, cd:6, apply:[{s:'sleep',dur:2,chance:0.65}], price:360, desc:'A soft song that puts one foe to sleep until they are hit.'},
+  {id:'gen_dread',   type:'genjutsu', el:null, lvl:16, name:'Whisper of Dread',  icon:'👁️', cp:18, cd:4, power:1.6, apply:[{s:'silence',dur:1,chance:0.65},{s:'weaken',dur:1}], price:560, desc:'A terrible whisper: no techniques, weaker blows.'},
+  {id:'gen_maze',    type:'genjutsu', el:null, lvl:20, name:'Mirror-Moon Maze',  icon:'🪞', cp:24, cd:5, power:1.3, target:'allEnemies', apply:[{s:'confuse',dur:2,chance:0.5}], price:800, desc:'Every foe sees friends as enemies. They hit each other.'},
+  {id:'gen_hollow',  type:'genjutsu', el:null, lvl:28, name:'Hollow Reflection', icon:'👥', cp:24, cd:5, power:2.0, cleanse:true, apply:[{s:'evasion',dur:3,on:'self'},{s:'focus',dur:3,on:'self'}], price:1200, desc:'Strike from a false self: cleanse, slip away and sharpen your aim.'},
+  {id:'gen_eclipse', type:'genjutsu', el:null, lvl:40, name:'Eclipse Dreamfall', icon:'🌘', cp:38, cd:6, power:3.0, target:'allEnemies', apply:[{s:'sleep',dur:2,chance:0.55},{s:'blind',dur:3}], price:2400, desc:'The moon goes dark and every foe drifts into a dream.'},
+  // KINJUTSU: forbidden arts. Each one costs health.
+  {id:'kin_pact',    type:'kinjutsu', el:null, lvl:15, name:'Blood Moon Pact',    icon:'🌑', cp:10, cd:5, target:'self', hpCost:0.15, apply:[{s:'frenzy',dur:3},{s:'haste',dur:2}], price:700, desc:'Pay in blood for a frenzy of speed and power.'},
+  {id:'kin_siphon',  type:'kinjutsu', el:null, lvl:20, name:'Soul-Thread Siphon', icon:'🧵', cp:16, cd:4, power:2.6, hpCost:0.10, leech:0.5, price:1000, desc:'Tear at the foe and steal half of the damage as health.'},
+  {id:'kin_curse',   type:'kinjutsu', el:null, lvl:28, name:'Ninefold Curse',     icon:'🔮', cp:22, cd:5, power:1.9, hpCost:0.12, apply:[{s:'bleed',dur:4,pow:0.35},{s:'weaken',dur:3},{s:'expose',dur:3}], price:1500, desc:'Nine unseen cuts, a withering and an open guard.'},
+  {id:'kin_seal',    type:'kinjutsu', el:null, lvl:36, name:'Seal of the Black Moon', icon:'⚫', cp:28, cd:6, power:5.6, hpCost:0.20, apply:[{s:'weaken',dur:2,on:'self'}], price:2200, desc:'One devastating strike. You are left weakened.'},
+  {id:'kin_requiem', type:'kinjutsu', el:null, lvl:48, name:'Requiem of Ash',     icon:'⚰️', cp:40, cd:7, power:3.6, target:'allEnemies', hpCost:0.25, leech:0.3, apply:[{s:'burn',dur:3,pow:0.5}], price:3800, desc:'A funeral song for everyone in front of you.'},
   // PET-ONLY (target 'ally' = the most wounded ally)
   {id:'pet_ember_bite', el:'fire',      lvl:1, petOnly:true, name:'Ember Bite',   icon:'🦊', cp:6, cd:2, power:1.1, apply:[{s:'burn',dur:2,pow:0.3}], desc:'A bite with smoldering fangs.'},
   {id:'pet_dive',       el:'wind',      lvl:1, petOnly:true, name:'Talon Dive',   icon:'🪶', cp:6, cd:2, power:0.7, hits:2, desc:'Two diving strikes.'},
@@ -127,7 +173,7 @@ const SKILLS = [
   {id:'en_venom', el:'water', lvl:1, enemyOnly:true, name:'Venom Fang', icon:'🐍', cp:8,  cd:2, power:1.0, apply:[{s:'bleed',dur:3,pow:0.3}], desc:'A poisoned bite.'},
   {id:'en_gust',  el:'wind',  lvl:1, enemyOnly:true, name:'Wing Gust',  icon:'🪶', cp:10, cd:3, power:0.7, apply:[{s:'slow',dur:2}], desc:'A buffeting blast of wings.'},
 ];
-SKILLS.forEach(s => { s.target = s.target || 'enemy'; s.hits = s.hits || 1; if(s.price == null) s.price = TIER_PRICE[s.lvl] || 100; });
+SKILLS.forEach(s => { s.type = s.type || 'ninjutsu'; s.target = s.target || 'enemy'; s.hits = s.hits || 1; if(s.price == null) s.price = TIER_PRICE[s.lvl] || 100; });
 const SKILL = Object.fromEntries(SKILLS.map(s => [s.id, s]));
 
 /* ENEMIES — stats come from enemyStats(level) × role multipliers (hpM, atkM, agiM, xpM, goldM).
@@ -346,6 +392,33 @@ function clanPerkText(cl, tier){
   return t.join(', ');
 }
 
+/* TALENTS — one pick per tier, unlocked by level. Each talent adds its `fx` to the ninja:
+   hpPct cpPct agiPct atkPct (stats), crit, dodge, dmg (all damage), dmgType {family: share}, cpCut (cheaper techniques),
+   cdCut (long cooldowns shorter), cpRegen / hpRegen (per turn), lifesteal, execute (vs foes under 30% HP), lastStand (under 35% HP),
+   critDmg, statusChance + genDur (illusions), hpCostCut (forbidden arts), opening [[status, turns]] and undying (survive one lethal blow). */
+const TALENT_TIERS = [5, 12, 20, 30, 40, 50];
+const TALENTS = [
+  {id:'hardy',   tier:0, icon:'🛡️', name:'Hardy Spirit',        desc:'+10% max HP.', fx:{hpPct:.10}},
+  {id:'deep',    tier:0, icon:'💧', name:'Deep Well',           desc:'+12% Chakra and 2% more Chakra back every turn.', fx:{cpPct:.12, cpRegen:.02}},
+  {id:'eyes',    tier:0, icon:'👁️', name:'Sharp Eyes',          desc:'+5% crit chance and +5% Power.', fx:{crit:5, atkPct:.05}},
+  {id:'thrifty', tier:1, icon:'🍃', name:'Thrifty Chakra',      desc:'Techniques cost 15% less Chakra.', fx:{cpCut:.15}},
+  {id:'brisk',   tier:1, icon:'⏱️', name:'Brisk Recovery',      desc:'Techniques with a cooldown of 2 or more recover 1 turn sooner.', fx:{cdCut:1}},
+  {id:'reflex',  tier:1, icon:'💨', name:'Moonlit Reflexes',    desc:'+10% Agility and +4% dodge.', fx:{agiPct:.10, dodge:4}},
+  {id:'fist',    tier:2, icon:'🥋', name:'Way of the Fist',     desc:'Taijutsu deals +22% damage. +3% crit.', fx:{dmgType:{taijutsu:.22}, crit:3}},
+  {id:'veil',    tier:2, icon:'🌀', name:'Way of Illusion',     desc:'Genjutsu lands 20% more often and lasts 1 turn longer.', fx:{statusChance:.20, genDur:1}},
+  {id:'elems',   tier:2, icon:'🔥', name:'Way of the Elements', desc:'Ninjutsu deals +15% damage.', fx:{dmgType:{ninjutsu:.15}}},
+  {id:'forbid',  tier:3, icon:'☠️', name:'Forbidden Scholar',   desc:'Kinjutsu deals +25% damage and costs 30% less health.', fx:{dmgType:{kinjutsu:.25}, hpCostCut:.30}},
+  {id:'thirst',  tier:3, icon:'🩸', name:'Moon-Thirst',         desc:'Heal for 8% of all the damage you deal.', fx:{lifesteal:.08}},
+  {id:'ember',   tier:3, icon:'🕯️', name:'Ember of Resolve',    desc:'Below 35% HP, deal +30% damage.', fx:{lastStand:.30}},
+  {id:'gambit',  tier:4, icon:'🌬️', name:'Opening Gambit',      desc:'Start every battle with Haste and Empower for 2 turns.', fx:{opening:[['haste',2],['empower',2]]}},
+  {id:'exec',    tier:4, icon:'🎯', name:'Executioner',         desc:'+35% damage to foes below 30% HP.', fx:{execute:.35}},
+  {id:'stoic',   tier:4, icon:'⛩️', name:'Stoic Guardian',      desc:'Start battles with Guard for 3 turns, and heal 3% HP every turn.', fx:{opening:[['guard',3]], hpRegen:.03}},
+  {id:'second',  tier:5, icon:'🌙', name:'Second Wind',         desc:'Once per battle, a lethal blow leaves you at 1 HP, then you heal 30%.', fx:{undying:1}},
+  {id:'master',  tier:5, icon:'📜', name:'Master of All Arts',  desc:'All attacks deal +15% damage and techniques cost 10% less Chakra.', fx:{dmg:.15, cpCut:.10}},
+  {id:'bless',   tier:5, icon:'🌕', name:"Moon's Blessing",     desc:'+8% HP, Chakra, Agility and Power, and +5% crit.', fx:{hpPct:.08, cpPct:.08, agiPct:.08, atkPct:.08, crit:5}},
+];
+const TALENT = Object.fromEntries(TALENTS.map(t => [t.id, t]));
+
 /* ECHO ARENA — AI ghosts of other builds */
 const ARENA_TIERS = [{r:0,name:'Pebble Echo'},{r:1100,name:'Reed Echo'},{r:1250,name:'Lantern Echo'},{r:1450,name:'Crescent Echo'},{r:1700,name:'Eclipse Echo'}];
 const arenaTier = r => { let t = ARENA_TIERS[0]; ARENA_TIERS.forEach(x => { if(r >= x.r) t = x; }); return t; };
@@ -373,4 +446,4 @@ const HAIR_COLORS   = ['#2b2b3a','#5a3a22','#c98a3a','#e8d27a','#d8d8e4','#c43d4
 const OUTFIT_COLORS = ['#3a5a8c','#c9612e','#3d7a4f','#6b4a8c','#2c2c38','#b8363a','#d9a22b','#4c8c99'];
 const EYE_COLORS    = ['#3b6fd6','#6b4226','#3f9a5a','#8a3fbf','#c43d2b','#2b2b2b'];
 const SKIN_TONES    = ['#fbe0c8','#f3d2b3','#e0b48e','#c68b5e','#8d5a3b'];
-const HAIR_STYLES   = [{id:'spiky',name:'Spiky'},{id:'short',name:'Tidy'},{id:'ponytail',name:'Ponytail'},{id:'long',name:'Long'}];
+const HAIR_STYLES   = [{id:'spiky',name:'Spiky'},{id:'short',name:'Tidy'},{id:'ponytail',name:'Ponytail'},{id:'long',name:'Long'},{id:'bun',name:'Top bun'},{id:'bob',name:'Bob'},{id:'twin',name:'Twin tails'},{id:'braid',name:'Braid'}];

@@ -10,10 +10,11 @@ const recruitById = id => S.squad.roster.find(r => r.id === id);
 const hireCost = (l, real) => real ? 150 + l * 50 : 100 + l * 40;
 const trainCost = r => 20 + r.level * 15;
 const trainsLeft = r => { const t = S.squad.train; if(t.day !== todayKey()){ t.day = todayKey(); t.n = {}; } return TRAIN_PER_DAY - (t.n[r.id] || 0); };
-const recruitSkillPrice = (r, s) => s.el === r.element ? s.price : s.price * 2;
+const recruitSkillPrice = (r, s) => skillPrice(s, r);
 const newId = () => 'r' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
 function asRecruit(g, origin){
   g.id = newId(); g.origin = origin; g.xp = 0; g.points = 0; g.pet = null; g.pets = []; g.bond = {}; g.clan = null; g.squad = []; delete g.diff;
+  g.auto = false; g.petAuto = true; g.talents = blankTalents();
   g.bound = {}; for(const sl of SLOTS) if(g.equip[sl]) g.bound[sl] = true;  // starting gear is bound to the recruit
   return g;
 }
@@ -33,16 +34,14 @@ function gainXpFor(r, amt){
   return ups;
 }
 // Recruits grow into their element: the lodge master teaches them each new technique of their element for free
-// as they reach its level. With auto-upgrade on (the default) the new technique takes the loadout slot of their weakest one.
+// as they reach its level. With auto-upgrade on (the default) the AI then re-picks their best loadout and any new talent tier.
 const recruitTechs = r => SKILLS.filter(s => s.el === r.element && !s.enemyOnly && !s.petOnly && s.lvl <= r.level);
 function learnNewTechs(r){
   const learned = recruitTechs(r).filter(s => !r.skills.includes(s.id));
-  for(const s of learned){
-    r.skills.push(s.id);
-    if(r.autoTech === false) continue;
-    if(r.loadout.length < MAX_LOADOUT){ r.loadout.push(s.id); continue; }
-    const weakest = r.loadout.reduce((w, id) => SKILL[id].lvl < SKILL[w].lvl ? id : w);
-    if(SKILL[weakest].lvl < s.lvl) r.loadout[r.loadout.indexOf(weakest)] = s.id;
+  for(const s of learned) r.skills.push(s.id);
+  if(r.autoTech !== false){
+    if(learned.length) autoLoadout(r);
+    if(talentsUnpicked(r)) r.talents = autoTalents(r, true);
   }
   return learned;
 }
@@ -97,7 +96,7 @@ function learnRecruit(r, id){
   const s = SKILL[id]; if(!s || s.enemyOnly || s.petOnly) throw new Error('No such technique');
   if(r.skills.includes(id)) throw new Error('Already learned'); if(r.level < s.lvl) throw new Error(`${r.name} needs level ${s.lvl}`);
   const cost = recruitSkillPrice(r, s); if(S.char.gold < cost) throw new Error('Not enough gold');
-  S.char.gold -= cost; r.skills.push(id); if(r.loadout.length < MAX_LOADOUT) r.loadout.push(id); return `${r.name} learned ${s.name}`;
+  S.char.gold -= cost; r.skills.push(id); if(r.loadout.length < MAX_LOADOUT) r.loadout.push(id); else if(r.autoTech !== false) autoLoadout(r); return `${r.name} learned ${s.name}`;
 }
 function allocRecruit(r, a){
   const t = (a.hp | 0) + (a.cp | 0) + (a.agi | 0); if(t > r.points || t < 0) throw new Error(`${r.name} has ${r.points} points`);
@@ -131,21 +130,22 @@ function fameHTML(){
   return `<div class="panel hl-panel" style="margin-top:12px">🌟 Your echo has been recruited by <b>${hb}</b> other ninja.${claim ? ` <button class="btn sm primary" data-act="claimHires">Claim 🪙 ${claim * 60} + 🔴 ${claim * 2}</button>` : ''}</div>`;
 }
 function recruitCardHTML(r, mode, i){
-  const st = charStats(r), act = S.squad.active.includes(r.id), E = ELEMENTS[r.element];
+  const st = charStats(r), act = S.squad.active.includes(r.id), E = ELEMENTS[r.element], pet = r.pet && PET[r.pet];
   const tags = `<div class="tags" style="margin-top:6px"><span class="tag">❤️ ${st.maxHp}</span><span class="tag">🔷 ${st.maxCp}</span><span class="tag">💨 ${st.agi}</span><span class="tag">⚔️ ${st.atk}</span></div>
-    <div class="tags" style="margin-top:4px">${r.loadout.map(id => `<span class="tag">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div>`;
+    <div class="tags" style="margin-top:4px">${r.loadout.map(id => `<span class="tag" style="border-color:${skillColor(SKILL[id])}">${SKILL[id].icon} ${SKILL[id].name}</span>`).join('')}</div>`;
   let acts = '';
   if(mode === 'roster'){
     const tl = trainsLeft(r), capped = r.level >= S.char.level;
     acts = `${act ? '<span class="owned">✓ In squad</span>' : ''}
       <button class="btn sm ${act ? '' : 'primary'}" data-act="squadToggle" data-arg="${r.id}">${act ? 'Bench' : 'Add to squad'}</button>
+      <button class="btn sm" data-act="ctlR" data-arg="${r.id}" title="Who plays this ninja's turns in battle">${r.auto ? '🤖 Auto' : '🎮 You'}</button>
       <button class="btn sm" data-act="trainR" data-arg="${r.id}" ${capped || tl <= 0 || S.char.gold < trainCost(r) ? 'disabled' : ''}>${capped ? 'At leader level' : `Train 🪙${trainCost(r)} (${tl} left)`}</button>
-      <button class="btn sm" data-act="manageR" data-arg="${r.id}">Manage${r.points ? ` (+${r.points})` : ''}</button>`;
+      <button class="btn sm" data-act="manageR" data-arg="${r.id}">Manage${r.points || talentsUnpicked(r) ? ` (+${r.points + talentsUnpicked(r)})` : ''}</button>`;
   } else if(mode === 'pool') acts = `<button class="btn sm primary" data-act="hireR" data-arg="${i}" ${S.char.gold < r.cost ? 'disabled' : ''}>Recruit for 🪙 ${r.cost}</button>`;
-  return `<article class="panel ghost rc ${act ? 'active-r' : ''}"><div class="ps">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}</div>
+  return `<article class="panel ghost rc ${act ? 'active-r' : ''}"><div class="ps">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}${pet ? `<div class="ps-pet">${petSprite(r.pet)}</div>` : ''}</div>
     <div><h3>${esc(r.name)} <small class="muted" style="font-family:var(--body);font-size:12.5px">Lv ${r.level}</small></h3>
       <small class="muted">${r.origin === 'echo' ? `Echo of ${esc(r.fromName || 'a real ninja')}` : esc(r.archetype || 'Recruit')}</small>
-      <div class="gm"><span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span></div>
+      <div class="gm"><span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span>${pet ? `<span class="chip" style="--c:${ELEMENTS[pet.el].color}">🐾 ${pet.name}</span>` : ''}</div>
       ${mode === 'roster' ? `<div class="xpline" style="margin:6px 0 0"><span>XP</span><span class="bar xp thin"><i style="width:${r.level >= MAX_LEVEL ? 100 : r.xp / xpToNext(r.level) * 100}%"></i></span><span>${r.xp}/${xpToNext(r.level)}</span></div>` : ''}
       ${tags}</div>
     <div class="acts">${acts}</div></article>`;
@@ -158,9 +158,10 @@ function squadScreen(){
     <p class="note">Bring up to ${MAX_SQUAD} squadmates into every battle and command their turns yourself (or let Auto do it). They earn the same XP you do, share your clan perks, and can't outlevel you. Missions send tougher foes when your squad is bigger.</p>
     <div class="panel"><h3>Battle squad</h3><div class="squad-row">
       <div class="sq-slot lead"><div class="sq-sp">${playerSprite()}</div><b>${esc(c.name)}</b><small>Leader, Lv ${c.level}</small></div>
-      ${Array.from({length:MAX_SQUAD}, (_, i) => { const r = act[i]; return r ? `<button class="sq-slot" data-act="manageR" data-arg="${r.id}"><div class="sq-sp">${ninjaSVG(r.look, gearLooks(r), {scarf:ELEMENTS[r.element].color})}</div><b>${esc(r.name)}</b><small>${ELEMENTS[r.element].icon} Lv ${r.level}</small></button>` : `<div class="sq-slot empty"><div class="sq-sp big">＋</div><small>Empty slot</small></div>`; }).join('')}
-      ${c.pet ? `<div class="sq-slot"><div class="sq-sp">${petSprite(c.pet)}</div><b>${PET[c.pet].name}</b><small>Pet</small></div>` : ''}
-    </div><small class="muted">Team power ${buildPower(c, act)}</small></div>
+      ${Array.from({length:MAX_SQUAD}, (_, i) => { const r = act[i]; return r ? `<button class="sq-slot" data-act="manageR" data-arg="${r.id}"><div class="sq-sp">${ninjaSVG(r.look, gearLooks(r), {scarf:ELEMENTS[r.element].color})}${r.pet && PET[r.pet] ? `<div class="ps-pet">${petSprite(r.pet)}</div>` : ''}</div><b>${esc(r.name)}</b><small>${ELEMENTS[r.element].icon} Lv ${r.level}${r.auto ? ' · 🤖' : ''}</small></button>` : `<div class="sq-slot empty"><div class="sq-sp big">＋</div><small>Empty slot</small></div>`; }).join('')}
+      ${c.pet ? `<div class="sq-slot"><div class="sq-sp">${petSprite(c.pet)}</div><b>${PET[c.pet].name}</b><small>Your pet</small></div>` : ''}
+    </div><small class="muted">Team power ${buildPower(c, act)}. Each ninja can have a pet (Beast Den) and plays manually or on Auto.</small>
+    <div class="acts-row"><button class="btn primary sm" data-act="optTeam">✨ Optimize the whole team</button><small class="muted">Spends points, picks talents, learns the best techniques and buys and equips the best gear.</small></div></div>
     <h3 class="sub">Roster (${q.roster.length}/${MAX_ROSTER})</h3>
     <div class="stack">${q.roster.length ? q.roster.map(r => recruitCardHTML(r, 'roster')).join('') : '<div class="panel empty">No recruits yet. Hire one from the board below!</div>'}</div>
     <h3 class="sub">Recruit board</h3>
@@ -174,36 +175,45 @@ function squadScreen(){
 }
 function recruitScreen(){
   const r = recruitById(UI.recruitId); if(!r) return squadScreen();
-  const st = charStats(r), E = ELEMENTS[r.element], gear = ITEMS.filter(i => SLOTS.includes(i.slot) && S.inventory[i.id] > 0);
+  const st = charStats(r), E = ELEMENTS[r.element], gear = ITEMS.filter(i => SLOTS.includes(i.slot) && S.inventory[i.id] > 0), pet = r.pet && PET[r.pet];
   const row = (k, ic, name, val) => `<div class="srow"><span class="sic">${ic}</span><div><b>${name}</b><small>Points spent: ${r.alloc[k]}</small></div><span class="sv">${val}</span><button class="plus" data-act="allocR" data-arg="${r.id}:${k}" ${r.points ? '' : 'disabled'} aria-label="Add a point to ${name}">+</button></div>`;
-  const skills = SKILLS.filter(s => !s.enemyOnly && !s.petOnly && (s.el === r.element || r.skills.includes(s.id)) && s.lvl <= r.level + 5);
+  const ctl = (act, auto, label) => `<div class="seg" role="group" aria-label="${label}"><button class="${auto ? '' : 'on'}" data-act="${act}" data-arg="${r.id}:0" aria-pressed="${!auto}">🎮 You command</button><button class="${auto ? 'on' : ''}" data-act="${act}" data-arg="${r.id}:1" aria-pressed="${auto}">🤖 Auto (AI)</button></div>`;
   return `<section><h2 class="scr-title">🎌 ${esc(r.name)}</h2>
     <button class="btn sm ghost" data-act="go" data-arg="squad">← Back to the lodge</button>
     <div class="char-grid" style="margin-top:10px">
-      <div class="panel doll"><div class="doll-sprite">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}</div>
+      <div class="panel doll"><div class="doll-sprite">${ninjaSVG(r.look, gearLooks(r), {scarf:E.color})}${pet ? `<div class="ps-pet big">${petSprite(r.pet)}</div>` : ''}</div>
         <div class="rank-line"><b>Level ${r.level}</b><small>${r.origin === 'echo' ? `Echo of ${esc(r.fromName || 'a real ninja')}` : esc(r.archetype || 'Recruit')}</small></div>
-        <span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span></div>
+        <span class="chip" style="--c:${E.color}">${E.icon} ${E.name}</span>
+        <button class="btn sm" data-act="custom" data-arg="${r.id}">✏️ Name and appearance</button></div>
       <div class="panel"><div class="pts">${r.points ? `<b>${r.points}</b> points to spend` : 'No unspent points'} ${r.points ? `<button class="btn sm" data-act="autoAllocR" data-arg="${r.id}">Auto-assign</button>` : ''}</div>
         ${row('hp','❤️','Health', st.maxHp)}${row('cp','🔷','Chakra', st.maxCp)}${row('agi','💨','Agility', st.agi)}
         <div class="derived"><span>⚔️ Power ${st.atk}</span><span>🎯 Crit ${st.crit.toFixed(1)}%</span></div></div>
     </div>
+    <div class="panel" style="margin-top:12px"><h3>In battle</h3>
+      <p class="muted" style="font-size:13px">Choose who plays ${esc(r.name)}'s turns. You can also switch mid-battle.</p>${ctl('ctlRSet', !!r.auto, 'Who controls this ninja')}
+      <div class="acts-row" style="margin-top:10px"><button class="btn primary sm" data-act="optR" data-arg="${r.id}">✨ Optimize ${esc(r.name)}</button><small class="muted">Points, talents, techniques and gear, chosen by the AI.</small></div></div>
+    <h3 class="sub">Pet</h3>
+    <div class="panel">${pet ? `<div class="pet-line"><div class="ps">${petSprite(r.pet)}</div><div><b>${pet.name}</b> <span class="chip" style="--c:${ELEMENTS[pet.el].color}">${ELEMENTS[pet.el].icon} ${ELEMENTS[pet.el].name}</span><small class="muted">Bond ${bondLevel((r.bond || {})[r.pet])}. Stands behind ${esc(r.name)} in battle.</small></div></div>
+      <p class="muted" style="font-size:13px;margin-top:8px">Who plays the pet's turns?</p>${ctl('petCtlRSet', r.petAuto !== false, 'Who controls the pet')}`
+      : `<p class="muted">${esc(r.name)} has no pet yet. A pet fights right behind its ninja.</p>`}
+      <div class="acts-row" style="margin-top:8px"><button class="btn sm" data-act="denFor" data-arg="${r.id}">${pet ? 'Change pet in the Beast Den' : 'Choose a pet in the Beast Den'}</button></div></div>
+    <h3 class="sub">Talents</h3>${talentPanelHTML(r, r.id)}
     <h3 class="sub">Equipment</h3>
     <div class="slots">${SLOTS.map(sl => { const it = ITEM[r.equip[sl]]; return `<div class="panel slot"><div class="item-ic">${it ? it.icon : SLOT_INFO[sl].icon}</div>
       <div><small>${SLOT_INFO[sl].name}${it && r.bound[sl] ? ', bound' : ''}</small><b>${it ? it.name : 'Empty'}</b>${it ? `<small class="bonus">${fmtBonus(it.bonus)}</small>` : ''}</div>
       ${it ? `<button class="btn sm" data-act="unequipR" data-arg="${r.id}:${sl}" title="${r.bound[sl] ? 'Bound gear is discarded when removed' : ''}">${r.bound[sl] ? 'Discard' : 'Remove'}</button>` : ''}</div>`; }).join('')}</div>
-    ${gear.length ? `<p class="note" style="margin-top:10px">Equip from your pack (starting gear is bound to the recruit and is discarded when replaced):</p><div class="stack">${gear.map(it => `<div class="panel item"><div class="item-ic">${it.icon}</div><div class="item-b"><b>${it.name} ×${S.inventory[it.id]}</b><small class="bonus">${fmtBonus(it.bonus)}</small>${r.level < it.lvl ? `<small>Needs level ${it.lvl}</small>` : ''}</div><div class="item-act"><button class="btn sm primary" data-act="equipR" data-arg="${r.id}:${it.id}" ${r.level < it.lvl ? 'disabled' : ''}>Equip</button></div></div>`).join('')}</div>` : ''}
-    <h3 class="sub">Techniques (${r.loadout.length}/${MAX_LOADOUT} equipped)</h3>
-    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><small class="muted">${esc(r.name)} learns each new ${E.name} technique for free on reaching its level.</small>
-      <div class="seg" role="group" aria-label="Auto-upgrade techniques"><button class="${r.autoTech !== false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:1" aria-pressed="${r.autoTech !== false}">Auto-equip new</button><button class="${r.autoTech === false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:0" aria-pressed="${r.autoTech === false}">I'll choose</button></div></div>
-    <div class="stack">${skills.map(s => { const own = r.skills.includes(s.id), inLo = r.loadout.includes(s.id), lock = r.level < s.lvl, pr = recruitSkillPrice(r, s);
-      return `<article class="panel skill ${lock && !own ? 'locked' : ''}" style="--c:${ELEMENTS[s.el].color}"><div class="sk-ic">${s.icon}</div>
-        <div class="sk-body"><h4>${s.name}<small>Lv ${s.lvl}</small></h4><div class="tags"><span class="tag cp">${s.cp} CP</span>${skillTags(s).map(t => `<span class="tag">${t}</span>`).join('')}</div></div>
-        <div class="sk-act">${own ? `<button class="btn sm ${inLo ? '' : 'primary'}" data-act="loadR" data-arg="${r.id}:${s.id}">${inLo ? 'Unequip' : 'Equip'}</button>` : lock ? `<button class="btn sm" disabled>🔒 Lv ${s.lvl}</button>` : `<button class="btn sm primary" data-act="learnR" data-arg="${r.id}:${s.id}" ${S.char.gold < pr ? 'disabled' : ''}>Teach for 🪙 ${pr}</button>`}</div></article>`; }).join('')}</div>
+    <div class="acts-row" style="margin-top:8px"><button class="btn primary sm" data-act="gearR" data-arg="${r.id}">🛒 Buy and equip the best gear</button></div>
+    ${gear.length ? `<p class="note" style="margin-top:10px">Or equip from your pack (starting gear is bound to the recruit and is discarded when replaced):</p><div class="stack">${gear.map(it => `<div class="panel item"><div class="item-ic">${it.icon}</div><div class="item-b"><b>${it.name} ×${S.inventory[it.id]}</b><small class="bonus">${fmtBonus(it.bonus)}</small>${r.level < it.lvl ? `<small>Needs level ${it.lvl}</small>` : ''}</div><div class="item-act"><button class="btn sm primary" data-act="equipR" data-arg="${r.id}:${it.id}" ${r.level < it.lvl ? 'disabled' : ''}>Equip</button></div></div>`).join('')}</div>` : ''}
+    <h3 class="sub">Techniques</h3>
+    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><small class="muted">${esc(r.name)} learns each new ${E.name} technique for free on reaching its level. Other families are taught for gold.</small>
+      <div class="seg" role="group" aria-label="Auto-upgrade techniques"><button class="${r.autoTech !== false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:1" aria-pressed="${r.autoTech !== false}">AI picks</button><button class="${r.autoTech === false ? 'on' : ''}" data-act="autoTechR" data-arg="${r.id}:0" aria-pressed="${r.autoTech === false}">I'll choose</button></div></div>
+    ${techSectionHTML(r, r.id, 'recruit')}
     <div style="margin-top:16px"><button class="btn bad sm" data-act="dismissR" data-arg="${r.id}">Dismiss ${esc(r.name)}</button></div>
   </section>`;
 }
 
 /* ---------------- Actions ---------------- */
+const summarize = lines => lines.length ? lines.join('. ') : 'Everything is already set up well';
 const tryDo = f => { try{ const m = f(); persist(); render(); if(m) toast(m); }catch(e){ toast(e.message); } };
 const splitArg = a => { const i = a.indexOf(':'); return [a.slice(0, i), a.slice(i + 1)]; };
 const SQUAD_ACT = {
@@ -215,7 +225,14 @@ const SQUAD_ACT = {
   equipR: a => tryDo(() => { const [id, item] = splitArg(a); return equipRecruit(recruitById(id), item); }),
   unequipR: a => tryDo(() => { const [id, sl] = splitArg(a); unequipRecruit(recruitById(id), sl); }),
   learnR: a => tryDo(() => { const [id, sk] = splitArg(a); return learnRecruit(recruitById(id), sk); }),
-  autoTechR: a => tryDo(() => { const [id, v] = splitArg(a), r = recruitById(id); r.autoTech = v === '1'; if(r.autoTech) learnNewTechs(r); return r.autoTech ? `${r.name} will equip new techniques automatically` : `You'll pick ${r.name}'s techniques`; }),
+  ctlR: id => tryDo(() => { const r = recruitById(id); r.auto = !r.auto; return r.auto ? `${r.name} will fight on Auto` : `You will command ${r.name}`; }),
+  ctlRSet: a => tryDo(() => { const [id, v] = splitArg(a); recruitById(id).auto = v === '1'; }),
+  petCtlRSet: a => tryDo(() => { const [id, v] = splitArg(a); recruitById(id).petAuto = v === '1'; }),
+  denFor: id => { UI.denWho = id; go('den'); },
+  optR: id => tryDo(() => summarize(optimizeTeam(id))),
+  optTeam: () => tryDo(() => summarize(optimizeTeam('all'))),
+  gearR: id => tryDo(() => { const c = ninjaById(id), got = applyGearPlan(gearPlan([c], Math.max(0, S.char.gold)).plan); return got.length ? 'Equipped: ' + got.join(', ') : 'Already well equipped for your budget'; }),
+  autoTechR: a => tryDo(() => { const [id, v] = splitArg(a), r = recruitById(id); r.autoTech = v === '1'; if(r.autoTech){ learnNewTechs(r); autoLoadout(r); r.talents = autoTalents(r, true); } return r.autoTech ? `${r.name} will equip new techniques automatically` : `You'll pick ${r.name}'s techniques`; }),
   loadR: a => tryDo(() => { const [id, sk] = splitArg(a), r = recruitById(id), i = r.loadout.indexOf(sk); if(i >= 0) r.loadout.splice(i, 1); else { if(r.loadout.length >= MAX_LOADOUT) throw new Error('Loadout full'); r.loadout.push(sk); } }),
   dismissR: id => { const r = recruitById(id); showModal(`Dismiss ${esc(r.name)}?`, '<p>They leave the lodge for good. Gear you gave them returns to your pack; bound gear leaves with them.</p>', [{label:'Keep them', act:'closeModal'}, {label:'Dismiss', act:'doDismissR', arg:id, cls:'bad'}]); },
   doDismissR: id => { closeModal(); const q = S.squad, r = recruitById(id); if(!r) return; for(const sl of SLOTS) unequipRecruit(r, sl); q.roster = q.roster.filter(x => x.id !== id); q.active = q.active.filter(x => x !== id); persist(); go('squad'); toast(`${r.name} has left`); },
