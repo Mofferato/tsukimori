@@ -18,13 +18,13 @@ Create a ninja, master the five elements, take ranked missions, adopt pets, join
 - **Progression**: level cap 60, 3 stat points per level (spend them yourself or tap Auto-assign, also offered on the battle results screen), 5 ranks (Lantern Pupil to Eclipse Warden).
 - **Optimize**: one tap picks talents, learns the best techniques, sets the best 8, and buys and equips the best gear (a budget-aware knapsack, so it never buys a tier just to replace it). Works for you, one squadmate, or the whole team, and Momo can do it for you.
 - **Appearance**: rename any ninja and change hairstyle (8), hair, outfit, eyes, skin, headband and face wrap, with free colour pickers.
-- **22 missions** across D, C, B, A and S ranks, 32 enemies, boss enrage phases and first-clear rewards.
+- **22 missions** across D, C, B, A and S ranks (the results screen offers the next one, and the board and village flag any you haven't cleared), 32 enemies, boss enrage phases and first-clear rewards.
 - **Shop and gear**: 40+ items that change how your ninja looks.
 - **Squad Lodge**: recruit up to 6 ninja and bring 2 into every battle. Each one is played by you or by the AI (**Auto**), switchable at any moment from the battle screen. Train them, give them gear, talents and techniques, and spend their stat points. When a squadmate levels up they learn each new technique of their element for free, and the AI re-picks their best loadout and talents (or turn that off and choose yourself).
-- **Beast Den**: 7 pets that grow with bond. Every ninja, you and each squadmate, can have their own pet standing behind them, played by you or by the AI.
+- **Beast Den**: 7 pets that grow with bond. Every ninja, you and each squadmate, brings one pet at a time (so up to three pets in a battle), standing behind them and played by you or by the AI.
 - **Clan Hall**: 6 clans with perks that scale with reputation rank.
 - **Echo Arena**: PvP against AI ghosts of generated builds, your own build, friends' pasted builds, and real players online.
-- **Crimson Moon**: a weekly rotating boss with shared HP, 3 tries a day, milestones and a Moon Shard shop.
+- **Crimson Moon**: a weekly rotating boss whose level and shared HP are fixed for the week (levelling up never makes it bigger), 3 tries a day, milestones and a Moon Shard shop.
 - **Journal**: daily quests, a login streak and 15 achievements.
 - **Momo the guide**: answers questions and acts for you (spend points, buy and equip gear, learn techniques, adopt pets, join clans, claim rewards, start battles), with undo.
 - **Multiplayer servers**: join a server from the Village Square, host a village right from your phone with a code, or run a dedicated server with one command (see below).

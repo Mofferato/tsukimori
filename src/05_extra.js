@@ -283,7 +283,7 @@ const FAQ = [
   [/customi|appearance|rename|name|look|hair/i, 'Open the Ninja screen and tap "Name and appearance" to rename your ninja and change their hair, outfit, eyes, skin and more. Squadmates have the same option on their Manage screen.'],
   [/point|stat|agil/i, 'Each level gives 3 points. HP keeps you standing, Chakra fuels techniques, and Agility makes you act first, dodge and crit more.'],
   [/squad|team|recruit|train/i, 'At the Squad Lodge you can recruit up to 6 ninja and bring 2 into battle. You command their turns too! Train them with gold, teach them techniques, and online you can even hire echoes of real players.'],
-  [/pet|den/i, 'Pets from the Beast Den fight beside you on their own. They get stronger with bond every time you win together.'],
+  [/pet|den/i, 'Each ninja brings one pet at a time, so with two squadmates up to three pets fight in the same battle. You can adopt several and swap which one comes along, and command a pet yourself or leave it on Auto. Pets get stronger with bond every time you win together.'],
   [/clan/i, 'Clans give passive perks. Earn reputation from missions, arena wins and the Crimson Moon to rank up and make the perks stronger.'],
   [/arena|pvp|echo|ghost/i, 'The Echo Arena pits you against AI copies of other builds, including real players online. Win to raise your rating.'],
   [/moon|boss|event|raid/i, 'The Crimson Moon boss changes weekly and keeps its wounds between tries. You get 3 attempts a day, and everyone online chips in toward community rewards.'],

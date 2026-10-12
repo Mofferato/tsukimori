@@ -175,11 +175,12 @@ function hubScreen(){
   return `<section>
     <div class="village-wrap">${villageSVG()}<div id="net-village" class="net-village" aria-hidden="true"></div></div>
     ${c.points ? `<div class="panel notice" data-act="go" data-arg="character" role="button" tabindex="0">⬆️ You have ${c.points} unspent stat points. Tap to allocate them.</div>` : ''}
+    ${missedMissions().length ? `<div class="panel notice" data-act="missed" role="button" tabindex="0">📜 You haven't cleared ${missedMissions().length} mission${missedMissions().length > 1 ? 's' : ''} you're already high enough level for. Tap to see ${missedMissions().length > 1 ? 'them' : 'it'}.</div>` : ''}
     ${talentsUnpicked(c) ? `<div class="panel notice" data-act="go" data-arg="character" role="button" tabindex="0">🌟 You have ${talentsUnpicked(c)} talent pick${talentsUnpicked(c) > 1 ? 's' : ''} waiting. Tap to choose.</div>` : ''}
     ${(S.squad.roster || []).filter(m => talentsUnpicked(m) && m.autoTech === false).map(m => `<div class="panel notice" data-act="manageR" data-arg="${m.id}" role="button" tabindex="0">🌟 ${esc(m.name)} has a talent pick waiting.</div>`).join('')}
     ${(S.squad.roster || []).filter(m => m.points).map(m => `<div class="panel notice" data-act="manageR" data-arg="${m.id}" role="button" tabindex="0">👥 ${esc(m.name)} has ${m.points} unspent stat points. Tap to allocate them.</div>`).join('')}
     <div class="hub-grid">
-      ${b('missions','📜','Mission Board','Ranked missions for XP and gold')}
+      ${b('missions','📜','Mission Board', missedMissions().length ? `📜 ${missedMissions().length} new to clear` : 'Ranked missions for XP and gold')}
       ${b('academy','🏯','Academy','Learn and equip techniques')}
       ${b('shop','🏮','Shop','Weapons, garb and supplies')}
       ${b('home','🏠','Home','Inventory and equipment')}
@@ -198,7 +199,7 @@ function lockedScreen(title, lvl, text){
 function missionScreen(){
   const tab = UI.tab.missions, rk = MISSION_RANKS.find(r => r.id === tab), list = MISSIONS.filter(m => m.rank === tab);
   return `<section><h2 class="scr-title">📜 Mission Board</h2>
-    <div class="tabs" role="tablist">${MISSION_RANKS.map(r => `<button class="tab ${r.id === tab ? 'on' : ''}" style="--c:${r.color}" data-act="tab" data-arg="missions:${r.id}" role="tab" aria-selected="${r.id === tab}">${r.id}-rank</button>`).join('')}</div>
+    <div class="tabs" role="tablist">${MISSION_RANKS.map(r => { const n = missedMissions().filter(m => m.rank === r.id).length; return `<button class="tab ${r.id === tab ? 'on' : ''}" style="--c:${r.color}" data-act="tab" data-arg="missions:${r.id}" role="tab" aria-selected="${r.id === tab}">${r.id}-rank${n ? ` <span class="cnt" title="${n} not cleared yet">${n}</span>` : ''}</button>`; }).join('')}</div>
     <div class="stack">${list.length ? list.map(missionCard).join('') : `<div class="panel empty">No ${tab}-rank missions are posted yet.<br><small>They open around level ${rk.lvl} as the village grows.</small></div>`}</div>
   </section>`;
 }
@@ -206,7 +207,7 @@ function missionCard(m){
   const c = S.char, locked = c.level < m.lvl, clears = (S.missions[m.id] || {}).clears || 0, rc = MISSION_RANKS.find(r => r.id === m.rank).color;
   const stages = m.stages.map(st => `<div class="stage">${st.foes.map(([id, l]) => `<div class="mini flip" title="${esc(ENEMY[id].name)}, level ${l}">${miniSprite(id)}<small>Lv${l}</small></div>`).join('')}${st.boss ? '<span class="bosstag">BOSS</span>' : ''}</div>`).join('<span class="arrow">›</span>');
   return `<article class="panel mission ${locked ? 'locked' : ''}" style="--c:${rc}">
-    <header><span class="rank-badge">${m.rank}</span><div><h3>${m.name}</h3><small>For the ${m.client.toLowerCase()}, recommended level ${m.lvl}</small></div></header>
+    <header><span class="rank-badge">${m.rank}</span><div><h3>${m.name}${!locked && !clears ? ' <span class="newtag">NEW</span>' : ''}</h3><small>For the ${m.client.toLowerCase()}, recommended level ${m.lvl}</small></div></header>
     <p>${m.desc}</p>
     <div class="stages">${stages}</div>
     <div class="rewards"><span>✨ ${missionXp(m)} XP</span><span>🪙 ${missionGold(m)}</span>${m.firstClear && !clears ? `<span class="fc">🎁 First clear: ${m.firstClear.map(i => ITEM[i].name).join(', ')}</span>` : ''}${clears ? `<span>Cleared ${clears}×</span>` : ''}</div>
@@ -281,8 +282,18 @@ function charScreen(){
     <div class="panel records" style="margin-top:12px"><span>📜 Missions cleared ${S.stats.missions}</span><span>🏆 Battles won ${S.stats.won}</span><span>🩹 Battles lost ${S.stats.lost}</span><span>🏟️ Arena ${S.arena.wins}–${S.arena.losses}</span><span>🌕 Moon Shards ${S.shards}</span></div>
   </section>`;
 }
+// After a won mission: the next uncleared one is offered as a button, and anything you've skipped is listed.
+function nextMissionHTML(r){
+  if(r.kind !== 'mission' || !r.win) return '';
+  const missed = missedMissions().filter(m => m.id !== r.missionId);
+  if(!missed.length) return '';
+  const shown = missed.slice(0, 4);
+  return `<div class="panel hl-panel"><div>📜 <b>${missed.length} mission${missed.length > 1 ? 's' : ''}</b> at your level ${missed.length > 1 ? "haven't" : "hasn't"} been cleared yet: ${shown.map(m => `${m.rank}-rank <b>${esc(m.name)}</b>`).join(', ')}${missed.length > shown.length ? ` and ${missed.length - shown.length} more` : ''}.</div>
+    <div class="res-acts" style="margin-top:6px"><button class="btn sm" data-act="missed">Open the Mission Board</button></div></div>`;
+}
 function resultsScreen(){
   const r = UI.results; if(!r) return hubScreen();
+  const wonMission = r.kind === 'mission' && r.win, nm = wonMission ? nextMissionAfter(r.missionId) : null, lock = wonMission && !nm ? nextLockedMission() : null;
   const c = S.char, mine = r.newSkills.filter(s => s.type === 'ninjutsu' ? s.el === c.element : true);
   return `<section class="${r.win ? 'win' : 'lose'}">
     <div class="res-banner"><span>${r.title}</span><small>${esc(r.sub)}</small></div>
@@ -298,9 +309,11 @@ function resultsScreen(){
     ${r.newRank ? `<div class="panel hl-panel">🎖️ New rank: ${r.newRank.name}. ${r.newRank.desc}</div>` : ''}
     ${mine.length ? `<div class="panel hl-panel">📖 New at the Academy: ${mine.map(s => s.icon + ' ' + s.name).join(', ')}</div>` : ''}
     ${!r.win && !r.fled ? `<p class="muted center">Tip: bring salves, Charge when Chakra runs low, and lead with the element that beats your foe.</p>` : ''}
+    ${nextMissionHTML(r)}
     <div class="res-btns">
-      <button class="btn primary" data-act="go" data-arg="hub">Return to the village</button>
+      <button class="btn ${nm ? '' : 'primary'}" data-act="go" data-arg="hub">Return to the village</button>
       ${r.retry ? `<button class="btn" data-act="${r.retry.act}" data-arg="${r.retry.arg}">${r.retry.label}</button>` : ''}
+      ${nm ? `<button class="btn primary" data-act="startMission" data-arg="${nm.id}" title="${esc(nm.name)}">Next mission ▸ <small>${esc(nm.name)} (Lv ${nm.lvl})</small></button>` : lock ? `<button class="btn" disabled>Next: ${esc(lock.name)} <small>unlocks at level ${lock.lvl}</small></button>` : ''}
       ${c.points || (r.squadUps || []).some(u => (recruitById(u.id) || {}).points) ? `<button class="btn" data-act="autoAllocAll">Auto-assign all points</button>` : ''}
     </div></section>`;
 }
@@ -331,7 +344,7 @@ function denScreen(){
   const members = [c, ...S.squad.roster], owner = UI.denWho && UI.denWho !== 'leader' && recruitById(UI.denWho) ? recruitById(UI.denWho) : c, who = owner === c ? 'leader' : owner.id;
   const st = charStats(owner), you = owner === c;
   return `<section><h2 class="scr-title">🦊 Beast Den</h2>
-    <p class="note">Every ninja can bring one pet. It stands behind its ninja, its stats scale with its owner's, and each battle it wins raises its bond (up to level 10, +6% stats per level). You can command a pet yourself or leave it to the AI.</p>
+    <p class="note">Every ninja can bring <b>one pet at a time</b>, so with two squadmates up to <b>three pets</b> fight in the same battle (yours and one for each squadmate). Adopt several and swap whichever one comes along. It stands behind its ninja, its stats scale with its owner's, and each battle it wins raises its bond (up to level 10, +6% stats per level). You can command a pet yourself or leave it to the AI.</p>
     ${members.length > 1 ? `<div class="tabs" role="tablist" aria-label="Choose whose pet">${members.map(m => { const w = m === c ? 'leader' : m.id; return `<button class="tab ${w === who ? 'on' : ''}" data-act="denFor" data-arg="${w}" role="tab" aria-selected="${w === who}">${m === c ? '★ ' : ''}${esc(m.name)}${m.pet && PET[m.pet] ? ' 🐾' : ''}</button>`; }).join('')}</div>` : ''}
     <p class="muted" style="margin-bottom:8px">Pets for <b>${esc(owner.name)}</b> (level ${owner.level}). Adopting costs your gold.</p>
     <div class="stack">${PETS.map(p => {
@@ -421,10 +434,10 @@ function eventScreen(){
   const shop = ITEMS.filter(i => i.shards);
   return `<section><h2 class="scr-title">🌕 Crimson Moon</h2>
     <div class="event-hero"><div class="eb"><div>${spriteSVG({kind:boss.kind, look:boss.look, gear:boss.gear})}</div>
-      <div><small>This week's boss, level ${ev.bossLvl}. Changes in ${fmtDur(msToNextWeek())}.</small><h3>${boss.name}</h3>
+      <div><small>This week's boss, level ${ev.bossLvl} (fixed for the week, so levelling up only makes it easier). Changes in ${fmtDur(msToNextWeek())}.</small><h3>${boss.name}</h3>
         <small>${ELEMENTS[boss.el].icon} ${ELEMENTS[boss.el].name}, weak to ${ELEMENTS[weakTo].icon} ${ELEMENTS[weakTo].name}. Enrages below half health.</small>
         <div class="bar hp"><i style="width:${100 - pct}%"></i><b>${Math.max(0, ev.pool - ev.dmg)} / ${ev.pool}</b></div>
-        <small>${dead ? 'Defeated this week! Claim your rewards below.' : `The boss keeps its wounds between attempts. Each attempt lasts ${EVENT_ROUNDS} rounds.`}</small></div></div></div>
+        <small>${dead ? 'Defeated this week! Claim your rewards below.' : `Damage carries over between attempts and between days until the boss changes (${fmtDur(msToNextWeek())}). Each attempt lasts ${EVENT_ROUNDS} rounds.`}</small></div></div></div>
     <div class="panel" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div><b>${left} of ${EVENT_TRIES}</b> attempts left today<br><small class="muted">Best hit this week: ${ev.best}. Shards: <b class="shardline">🔴 ${S.shards}</b></small></div>
       <button class="btn primary big" data-act="eventFight" ${dead || left <= 0 ? 'disabled' : ''}>${dead ? 'Defeated' : left <= 0 ? 'Come back tomorrow' : 'Challenge the boss'}</button></div>
@@ -567,6 +580,7 @@ const ACT = {
     setTimeout(() => { GUIDE.open = true; GUIDE.msgs = []; guideIntro(); guideSay('momo', 'Tip: tap the Mission Board and take "Bandits on the Reed Road" first. I can also do things for you, just ask!'); renderGuide(); }, 500);
   },
   tab: a => { const [k, v] = a.split(':'); UI.tab[k] = v; render(); },
+  missed: () => { const m = missedMissions()[0]; if(m) UI.tab.missions = m.rank; go('missions'); },
   startMission: a => startMission(a),
   learn: a => {
     const s = SKILL[a], c = S.char, price = skillPrice(s);

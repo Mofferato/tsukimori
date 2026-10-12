@@ -183,6 +183,15 @@ function skillTags(s){
   (s.apply || []).forEach(a => { const st = STATUSES[a.s]; t.push(`${st.icon} ${st.name}${a.chance < 1 ? ' ' + Math.round(a.chance * 100) + '%' : ''}${a.on === 'self' || (s.target === 'self') ? ' (self)' : ''}`); });
   return t;
 }
+// Missions you are high enough level for but have never cleared (the board order is rank, then level).
+const missionCleared = m => ((S.missions[m.id] || {}).clears || 0) > 0;
+const missedMissions = () => MISSIONS.filter(m => m.lvl <= S.char.level && !missionCleared(m));
+// The mission to suggest after `id`: the next uncleared one on the board, wrapping around to the first.
+function nextMissionAfter(id){
+  const open = missedMissions(), i = MISSIONS.findIndex(m => m.id === id);
+  return open.find(m => MISSIONS.indexOf(m) > i) || open[0] || null;
+}
+const nextLockedMission = () => MISSIONS.find(m => m.lvl > S.char.level) || null;
 function missionXp(m){ return m.xp != null ? m.xp : Math.round(xpToNext(m.lvl) * 0.3); }
 function missionGold(m){ return m.gold != null ? m.gold : Math.round(30 + m.lvl * 20); }
 
@@ -661,7 +670,7 @@ function finishRun(outcome, fled = false){
   const petUnits = B ? B.allies.filter(a => a.isPet) : [], squadUnits = B ? B.allies.filter(a => a.isSquad) : [];
   if(RUN.kind === 'mission'){
     const m = MISSION[RUN.id];
-    res.title = win ? 'Mission complete' : fled ? 'Mission abandoned' : 'Mission failed'; res.sub = m.name; res.retry = {act:'startMission', arg:m.id, label:win ? 'Run it again' : 'Try again'};
+    res.missionId = m.id; res.title = win ? 'Mission complete' : fled ? 'Mission abandoned' : 'Mission failed'; res.sub = m.name; res.retry = {act:'startMission', arg:m.id, label:win ? 'Run it again' : 'Try again'};
     if(win){
       res.xp += missionXp(m); res.gold += missionGold(m);
       const rec = S.missions[m.id] || (S.missions[m.id] = {clears:0});
@@ -689,6 +698,7 @@ function finishRun(outcome, fled = false){
     res.win = true; res.title = boss.hp <= 0 ? 'The boss has fallen!' : 'Attempt complete'; res.sub = boss.name; res.retry = {act:'go', arg:'event', label:'Back to the event'};
     res.lines.push(`💥 You dealt <b>${dealt}</b> damage (${(dealt / ev.pool * 100).toFixed(1)}% of its health)`);
     res.lines.push(`<span class="shardline">🔴 +${sh} Moon Shards</span>`);
+    if(boss.hp > 0) res.lines.push(`🩸 The boss has <b>${Math.max(0, ev.pool - ev.dmg)}</b> of ${ev.pool} health left. It keeps its wounds until it changes in ${fmtDur(msToNextWeek())}.`);
     if(boss.hp <= 0 && before < ev.pool){ ev.kills++; res.lines.push('🏆 You struck the final blow this week!'); }
     res.xp += Math.round(xpToNext(c.level) * 0.05); res.gold += 20 + c.level * 5;
     if(c.clan){ res.lines.push(`${CLAN[c.clan.id].crest} +10 clan reputation`); res.clanUp = addClanRep(10); }
@@ -725,8 +735,11 @@ function msToNextWeek(){ return ((weekIndex() + 1) * 7 - 3) * DAY - Date.now(); 
 function todayKey(){ return new Date().toISOString().slice(0, 10); }
 function syncEvent(){
   const ev = S.event, w = weekIndex();
-  if(ev.week !== w) Object.assign(ev, {week:w, bossId:EVENT_BOSSES[((w % EVENT_BOSSES.length) + EVENT_BOSSES.length) % EVENT_BOSSES.length], dmg:0, claimed:[], best:0});
-  if(ev.dmg === 0){ // boss level locks in with the first hit of the week
+  const fresh = ev.week !== w;
+  if(fresh) Object.assign(ev, {week:w, bossId:EVENT_BOSSES[((w % EVENT_BOSSES.length) + EVENT_BOSSES.length) % EVENT_BOSSES.length], dmg:0, claimed:[], best:0, bossLvl:0, pool:0});
+  // The boss's level (and so its health pool) is set once, when the week starts, and never changes: levelling up
+  // mid-week makes it easier to beat, not bigger. (It used to be re-measured until the first hit landed.)
+  if(fresh || !ev.bossLvl || !ev.pool){
     const lvl = Math.max(5, S.char.level + 2);
     ev.bossLvl = lvl; ev.pool = Math.round(enemyStats(lvl).hp * ENEMY[ev.bossId].hpM * EVENT_POOL);
   }
