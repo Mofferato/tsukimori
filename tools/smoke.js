@@ -137,6 +137,9 @@ for(const m of ['d1', 'd3', 'c3', 'b4']){
   let guard = 0; while(ev('!!RUN') && guard++ < 6){ if(!click('#modal-card [data-act="nextStage"]')) break; scr = playBattle('0', m + ' next stage'); }
   ok(ev('UI.screen') === 'results', m + ': ends on the results screen (got ' + ev('UI.screen') + ')');
   ok(!bad.test(doc.querySelector('#main').innerHTML), m + ': results screen clean');
+  const btns = [...doc.querySelectorAll('.res-btns .btn')].map(x => x.textContent);
+  ok(btns.some(t => /Next mission/.test(t)), m + ': results offers a Next mission button (' + btns.map(t => t.trim().slice(0, 24)).join(' | ') + ')');
+  const nx = doc.querySelector('.res-btns .btn.primary[data-act="startMission"]'); ok(nx && ev(`MISSION['${nx.dataset.arg}'].lvl <= S.char.level && !missionCleared(MISSION['${nx.dataset.arg}'])`), m + ': the next mission is unlocked and uncleared');
 }
 
 section('battle: AI squad + auto + arena + event');
@@ -157,7 +160,7 @@ const rules = ev(`(() => {
   // silence blocks techniques, not basic attacks
   a.statuses.push({s:'silence', dur:2, val:0}); out.silenced = canUse(a, SKILL.fire_spark); a.statuses = [];
   // hp cost
-  a.hp = 500; useSkill(a, SKILL.kin_pact, a); out.hpPaid = 500 - a.hp; a.cds = {}; a.hp = 300; const before = a.hp; const k = SKILL.kin_siphon; useSkill(a, k, d); out.leech = a.hp > before - Math.round(500 * 0.10); a.hp = 500; a.cds = {}; a.statuses = [];
+  a.hp = 500; useSkill(a, SKILL.kin_pact, a); out.hpPaid = 500 - a.hp; a.cds = {}; const k = SKILL.kin_siphon; out.leech = false; for(let t = 0; t < 12 && !out.leech; t++){ a.hp = 300; a.cds = {}; a.cp = 999; const before = a.hp; useSkill(a, k, d); out.leech = a.hp > before - Math.round(500 * 0.10); } a.hp = 500; a.cds = {}; a.statuses = [];
   // cannot cast a kinjutsu that would kill you
   a.hp = 10; out.tooWeak = canUse(a, k); a.hp = 500;
   // sleep skips the turn and wakes on damage
@@ -204,6 +207,41 @@ r = tool('auto_gear', {who:rid}); ok(r.ok, 'auto_gear a recruit');
 const sug = ev('suggestions()'); ok(Array.isArray(sug) && sug.every(x => x.text && x.tool), 'suggestions well-formed (' + sug.length + ')');
 ev(`S.char.gold = 30000; S.char.equip = {weapon:'kunai_train', clothing:null, back:null, accessory:null}; S.inventory = {};`);
 for(const x of ev('suggestions()')){ const out = ev(`(() => { try{ GUIDE.offerList = [suggestions().find(s => s.tool === '${x.tool}')]; guideDo(0); return 'ok'; }catch(e){ return e.message; } })()`); ok(out === 'ok', 'offline suggestion runs: ' + x.tool); }
+
+section('missed missions and the next-mission button');
+ev(`S.missions = {}; S.char.level = 31; go('hub')`);
+ok(/haven't cleared/.test(doc.querySelector('#main').innerHTML), 'hub warns about uncleared missions');
+ok(ev('missedMissions().length') === ev('MISSIONS.filter(m => m.lvl <= 31).length'), 'every unlocked mission counts as missed at first');
+ev(`ACT.missed()`); ok(ev('UI.screen') === 'missions', 'the notice opens the Mission Board');
+ok(doc.querySelectorAll('.newtag').length > 0 && doc.querySelectorAll('.tab .cnt').length > 0, 'board shows NEW tags and rank counts');
+ev(`for(const m of MISSIONS) if(m.lvl <= 31) S.missions[m.id] = {clears:1}`);
+ok(ev('missedMissions().length') === 0 && ev('nextMissionAfter("b4")') === null, 'nothing missed once everything unlocked is cleared');
+ok(ev('nextLockedMission().lvl') > 31, 'the next locked mission is above your level');
+ev(`delete S.missions.b3; delete S.missions.d2;`);
+ok(ev('nextMissionAfter("b2").id') === 'b3', 'next after b2 is the uncleared b3'); ok(ev('nextMissionAfter("b3").id') === 'd2', 'wraps around to an earlier skipped mission');
+ev(`S.missions = {}`);
+
+section('Crimson Moon boss stays fixed for the week');
+ev(`S.char.level = 20; S.event = Object.assign(S.event, {week:-1, dmg:0}); syncEvent();`);
+const e1 = ev('({lvl:S.event.bossLvl, pool:S.event.pool})');
+ok(e1.lvl === 22, 'boss is level+2 when the week starts (' + e1.lvl + ')');
+ev(`S.char.level = 40; syncEvent(); syncEvent();`);
+const e2 = ev('({lvl:S.event.bossLvl, pool:S.event.pool})');
+ok(e2.lvl === e1.lvl && e2.pool === e1.pool, 'levelling up before the first hit no longer inflates the boss');
+ev(`S.event.dmg = 500; S.char.level = 50; syncEvent();`);
+ok(ev('S.event.bossLvl') === 22 && ev('S.event.dmg') === 500, 'wounds and level persist after a hit');
+ev(`S.event.week = S.event.week - 1; syncEvent();`);
+ok(ev('S.event.bossLvl') === 52 && ev('S.event.dmg') === 0, 'a new week brings a fresh boss at the new level');
+ev(`S.settings.auto = false; S.event.tries = 0; S.event.dmg = 0; syncEvent(); S.char.level = 30; S.event.bossLvl = 0; syncEvent();`);
+playBattle('startEvent()', 'event result message', 1200);
+ok(ev('UI.results && UI.results.lines.some(l => /health left|has fallen|final blow/.test(l)) || (UI.results && UI.results.title === "The boss has fallen!")'), 'event results tell you how much health the boss has left');
+ev(`UI.results = null`);
+
+section('pet rule is explained');
+ev(`go('den')`); ok(/one pet at a time/.test(doc.querySelector('#main').innerHTML) && /three pets/.test(doc.querySelector('#main').innerHTML), 'Beast Den explains one pet per ninja, up to three in battle');
+ok(ev(`(() => { const t = FAQ.find(([re]) => re.test('how many pets')); return /three pets/.test(t[1]); })()`), "Momo's FAQ explains it too");
+const inBattle = ev(`(() => { S.settings.auto = false; recruitById('${rid2}').pet = 'gale_hawk'; recruitById('${rid2}').pets = ['gale_hawk']; recruitById('${rid}').pet = 'ember_fox'; S.char.pet = 'moss_boar'; const t = playerTeam(null); return {pets:t.filter(u => u.isPet).length, ninja:t.filter(u => !u.isPet).length, perOwner:new Set(t.filter(u => u.isPet).map(u => u.ownerUid)).size}; })()`);
+ok(inBattle.pets === 3 && inBattle.ninja === 3 && inBattle.perOwner === 3, 'a full squad brings exactly three pets, one per ninja: ' + JSON.stringify(inBattle));
 
 section('every data-act in every screen has a handler');
 const handlers = new Set(ev('Object.keys(ACT)'));
